@@ -357,34 +357,88 @@ function createLocalSqliteD1Adapter(): D1Database | null {
   }
 }
 
+function isD1Database(val: unknown): val is D1Database {
+  return (
+    typeof val === 'object' &&
+    val !== null &&
+    typeof (val as { prepare?: unknown }).prepare === 'function' &&
+    typeof (val as { batch?: unknown }).batch === 'function'
+  );
+}
+
+function findD1InObject(
+  obj: Record<string, unknown> | undefined | null
+): D1Database | null {
+  if (!obj || typeof obj !== 'object') return null;
+  // 1. Match common binding names (DB, db, D1, d1)
+  if (isD1Database(obj.DB)) return obj.DB;
+  if (isD1Database(obj.db)) return obj.db;
+  if (isD1Database(obj.D1)) return obj.D1;
+  if (isD1Database(obj.d1)) return obj.d1;
+
+  // 2. Scan all properties in case user named the variable after the database (e.g. intvl_2_d1)
+  for (const val of Object.values(obj)) {
+    if (isD1Database(val)) {
+      return val;
+    }
+  }
+  return null;
+}
+
 /**
  * Resolves the active Cloudflare D1 database binding from:
- * 1. `@cloudflare/next-on-pages` request context (`getRequestContext().env.DB`)
- * 2. Global / `process.env.DB` binding
- * 3. Local SQLite D1 adapter fallback
+ * 1. Cloudflare request context (`globalThis[Symbol.for('__cloudflare-request-context__')]?.env`)
+ * 2. `@cloudflare/next-on-pages` request context (`getRequestContext().env`)
+ * 3. Global / `process.env.DB` binding
+ * 4. Local SQLite D1 adapter fallback
  */
 export async function getD1Database(): Promise<D1Database> {
+  // 1. Direct Cloudflare Request Context Symbol lookup
+  const symbolCtx = (
+    globalThis as unknown as Record<symbol, unknown>
+  )[Symbol.for('__cloudflare-request-context__')] as
+    | { env?: Record<string, unknown> }
+    | undefined;
+
+  const dbFromSymbol = findD1InObject(symbolCtx?.env);
+  if (dbFromSymbol) {
+    await ensureDatabaseReady(dbFromSymbol);
+    return dbFromSymbol;
+  }
+
+  // 2. @cloudflare/next-on-pages getRequestContext lookup
+  let nopEnv: Record<string, unknown> | undefined;
   try {
     const nextOnPages = await import('@cloudflare/next-on-pages');
     const ctx = nextOnPages.getRequestContext?.();
-    if (ctx?.env && (ctx.env as CloudflareEnv).DB) {
-      const db = (ctx.env as CloudflareEnv).DB;
-      await ensureDatabaseReady(db);
-      return db;
+    nopEnv = (ctx?.env as unknown) as Record<string, unknown> | undefined;
+    const dbFromNop = findD1InObject(nopEnv);
+    if (dbFromNop) {
+      await ensureDatabaseReady(dbFromNop);
+      return dbFromNop;
     }
   } catch {
     // Running outside @cloudflare/next-on-pages request context
   }
 
-  const globalDb =
-    (process.env.DB as unknown as D1Database | undefined) ||
-    ((globalThis as unknown as { DB?: D1Database }).DB ?? undefined);
-
-  if (globalDb && typeof globalDb.prepare === 'function') {
-    await ensureDatabaseReady(globalDb);
-    return globalDb;
+  // 3. Process.env & Global bindings
+  const dbFromProcess = findD1InObject(
+    process.env as unknown as Record<string, unknown>
+  );
+  if (dbFromProcess) {
+    await ensureDatabaseReady(dbFromProcess);
+    return dbFromProcess;
   }
 
+  const dbFromGlobal = findD1InObject(
+    globalThis as unknown as Record<string, unknown>
+  );
+  if (dbFromGlobal) {
+    await ensureDatabaseReady(dbFromGlobal);
+    return dbFromGlobal;
+  }
+
+  // 4. Local SQLite D1 adapter for offline / Node.js development
   if (!localD1Singleton) {
     localD1Singleton = createLocalSqliteD1Adapter();
   }
@@ -394,7 +448,16 @@ export async function getD1Database(): Promise<D1Database> {
     return localD1Singleton;
   }
 
-  throw new Error('Cloudflare D1 binding (DB) not found.');
+  const detectedEnv = symbolCtx?.env || nopEnv;
+  const detectedKeys = detectedEnv ? Object.keys(detectedEnv) : [];
+  const keyMsg =
+    detectedKeys.length > 0
+      ? `Detected env/binding keys: [${detectedKeys.join(', ')}].`
+      : 'No bindings found in Cloudflare request context.';
+
+  throw new Error(
+    `Cloudflare D1 binding (DB) not found. ${keyMsg} Please add a D1 binding named "DB" in Cloudflare Pages Settings -> Bindings, and then trigger a Redeploy.`
+  );
 }
 
 /**
