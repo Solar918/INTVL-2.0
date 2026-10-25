@@ -3,16 +3,11 @@ compatibility_date = "2024-11-18"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = ".vercel/output/static"
 
-# Cloudflare D1 Serverless SQLite Binding:
-# Configured directly in the Cloudflare Dashboard:
-# Workers & Pages -> your Pages project -> Settings -> Bindings -> D1 database bindings:
-# Variable name: DB -> intvl_2_d1
-#
-# (Uncomment and set your real UUID below only if deploying via Wrangler CLI)
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "intvl_2_d1"
-# database_id = "00000000-0000-0000-0000-000000000000"
-# migrations_dir = "drizzle"
+# Cloudflare D1 Serverless SQLite Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "intvl_2_d1"
+database_id = "db2efe7e-18a2-401e-93f4-5be7a91025ac"
+migrations_dir = "drizzle"
 
 # [vars] can be defined here for Cloudflare Pages environment variables, or configured in the Cloudflare dashboard.
