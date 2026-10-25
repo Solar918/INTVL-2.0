@@ -1,0 +1,49 @@
+{
+  "name": "intvl-2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "INTVL 2.0 — Real-world multiplayer territory conquest platform powered by Next.js, Cloudflare D1, Strava Webhooks, and Uber H3.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "pages:build": "npx @cloudflare/next-on-pages",
+    "preview": "npm run pages:build && wrangler pages dev .vercel/output/static --d1=DB",
+    "deploy": "npm run pages:build && wrangler pages deploy .vercel/output/static",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 execute intvl_2_d1 --local --file=./schema.sql",
+    "db:migrate:prod": "wrangler d1 execute intvl_2_d1 --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "@turf/turf": "^7.1.0",
+    "better-sqlite3": "^11.6.0",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.36.4",
+    "framer-motion": "^11.15.0",
+    "h3-js": "^4.1.0",
+    "lucide-react": "^0.468.0",
+    "maplibre-gl": "^4.7.1",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.5.5"
+  },
+  "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.7",
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.1",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.1",
+    "autoprefixer": "^10.4.20",
+    "drizzle-kit": "^0.28.1",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "^15.1.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.91.0"
+  }
+}
