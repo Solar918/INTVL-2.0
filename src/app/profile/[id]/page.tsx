@@ -69,6 +69,8 @@ export default function UserProfilePage({
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editColor, setEditColor] = useState('#00f0ff');
+  const [editAutoSyncEnabled, setEditAutoSyncEnabled] = useState(true);
+  const [isUpdatingAutoSync, setIsUpdatingAutoSync] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDisconnectingStrava, setIsDisconnectingStrava] = useState(false);
 
@@ -96,6 +98,7 @@ export default function UserProfilePage({
       setEditDisplayName(data.user.displayName);
       setEditBio(data.user.bio || '');
       setEditColor(data.user.colorHex);
+      setEditAutoSyncEnabled(data.user.autoSyncEnabled ?? true);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Failed to load athlete profile.'
@@ -136,18 +139,52 @@ export default function UserProfilePage({
     }
   };
 
+  const handleToggleAutoSync = async () => {
+    if (isUpdatingAutoSync) return;
+    const nextValue = !editAutoSyncEnabled;
+    setEditAutoSyncEnabled(nextValue);
+    setIsUpdatingAutoSync(true);
+    try {
+      const res = await fetch('/api/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoSyncEnabled: nextValue }),
+      });
+      if (res.ok) {
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                user: {
+                  ...prev.user,
+                  autoSyncEnabled: nextValue,
+                },
+              }
+            : prev
+        );
+      } else {
+        setEditAutoSyncEnabled(!nextValue);
+      }
+    } catch {
+      setEditAutoSyncEnabled(!nextValue);
+    } finally {
+      setIsUpdatingAutoSync(false);
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editDisplayName.trim() || isSaving) return;
     setIsSaving(true);
     try {
-      const res = await fetch('/api/auth/me', {
+      const res = await fetch('/api/user/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           displayName: editDisplayName.trim(),
           bio: editBio.trim(),
           colorHex: editColor,
+          autoSyncEnabled: editAutoSyncEnabled,
         }),
       });
       if (res.ok) {
@@ -523,6 +560,40 @@ export default function UserProfilePage({
                       />
                     </div>
                   </div>
+                </div>
+
+                {/* Strava Integration: Automatic Activity Sync Toggle */}
+                <div className="flex items-start justify-between gap-4 rounded-xl border border-border-subtle bg-carbon-900/80 p-3.5">
+                  <div>
+                    <p className="font-mono text-xs font-bold text-white">
+                      Automatic Activity Sync
+                    </p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-zinc-400">
+                      When enabled, eligible walks and runs uploaded to Strava will automatically claim territory in your active round without manual review.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={editAutoSyncEnabled}
+                    aria-label="Automatic Activity Sync"
+                    disabled={isUpdatingAutoSync}
+                    onClick={handleToggleAutoSync}
+                    className={`relative mt-0.5 inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 disabled:opacity-50 ${
+                      editAutoSyncEnabled
+                        ? 'border-neon-lime/60 bg-neon-lime/25'
+                        : 'border-zinc-700 bg-carbon-950'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full transition-transform duration-200 ${
+                        editAutoSyncEnabled
+                          ? 'translate-x-6 bg-neon-lime shadow-[0_0_10px_#b4ff00]'
+                          : 'translate-x-1 bg-zinc-400'
+                      }`}
+                    />
+                  </button>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2">

@@ -131,6 +131,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    if (user.autoSyncEnabled === 0 || Boolean(user.autoSyncEnabled) === false) {
+      console.log(
+        `[INTVL 2.0 Strava Webhook] Skipped automatic activity sync for activity ${activityId} (user @${user.username} has auto_sync_enabled=0).`
+      );
+      return NextResponse.json(
+        {
+          acknowledged: true,
+          processed: false,
+          skippedByAutoSync: true,
+          reason: `Automatic Activity Sync is disabled for athlete @${user.username}. Activity remains available in the manual sync review queue.`,
+        },
+        { status: 200 }
+      );
+    }
+
     const activeRound =
       (await getActiveRoundForUser(user.id)) ??
       (await getActiveOrSpecifiedRound());

@@ -37,6 +37,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         homeZoom: user.homeZoom ?? 14,
         stravaAthleteId: user.stravaAthleteId,
         stravaConnected: Boolean(user.stravaAthleteId && user.refreshToken),
+        autoSyncEnabled: user.autoSyncEnabled !== 0,
         createdAt: user.createdAt,
       },
       stravaConfigured: isStravaConfigured(),
@@ -64,6 +65,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     homeLat?: number | null;
     homeLng?: number | null;
     homeZoom?: number | null;
+    autoSyncEnabled?: boolean | number;
   };
 
   if (body.colorHex !== undefined && !isValidTacticalColor(body.colorHex)) {
@@ -128,6 +130,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
       body.homeZoom !== undefined && body.homeZoom !== null
         ? Math.round(body.homeZoom)
         : body.homeZoom,
+    autoSyncEnabled: body.autoSyncEnabled,
   });
 
   return NextResponse.json({
@@ -146,6 +149,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
           stravaConnected: Boolean(
             updated.stravaAthleteId && updated.refreshToken
           ),
+          autoSyncEnabled: updated.autoSyncEnabled !== 0,
         }
       : null,
   });

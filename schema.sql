@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   home_lat REAL,
   home_lng REAL,
   home_zoom INTEGER DEFAULT 14,
+  auto_sync_enabled INTEGER NOT NULL DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

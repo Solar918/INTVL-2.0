@@ -37,6 +37,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             sessionUser.stravaAthleteId && sessionUser.refreshToken
           ),
           stravaAthleteId: sessionUser.stravaAthleteId,
+          autoSyncEnabled: sessionUser.autoSyncEnabled !== 0,
           activeCells: 0,
           activeAreaKm2: 0,
           dominancePercent: 0,

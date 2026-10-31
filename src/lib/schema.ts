@@ -25,6 +25,7 @@ export const users = sqliteTable(
     homeLat: real('home_lat'),
     homeLng: real('home_lng'),
     homeZoom: integer('home_zoom').default(14),
+    autoSyncEnabled: integer('auto_sync_enabled').notNull().default(1),
     createdAt: text('created_at')
       .notNull()
       .default(sql`(CURRENT_TIMESTAMP)`),

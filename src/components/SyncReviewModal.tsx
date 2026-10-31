@@ -119,19 +119,16 @@ export default function SyncReviewModal({
           data.nonLoopCount ?? list.filter((c) => !c.isLoop).length,
       });
 
-      const initialSelected = new Set<string>();
       const initialModes: Record<string, CaptureMode> = {};
 
       for (const item of list) {
         // Default mode: 'loop' for auto-loops, 'loop' (Force as Loop) for flagged walks with loop cells
         initialModes[item.stravaActivityId] = item.isLoop ? 'loop' : 'loop';
-        if (item.isLoop && !item.alreadyImportedInRound) {
-          initialSelected.add(item.stravaActivityId);
-        }
       }
 
       setOverrideModes(initialModes);
-      setSelectedIds(initialSelected);
+      // All fetched walks/runs initialize as unchecked (selected = false) by default
+      setSelectedIds(new Set<string>());
       setPerActivityCopilots({});
       setOpenCopilotPickerFor(null);
     } catch (err) {
@@ -446,29 +443,27 @@ export default function SyncReviewModal({
               </div>
 
               {candidates.length > 0 && (
-                <div className="flex items-center gap-2 font-mono text-[11px]">
-                  <button
-                    type="button"
-                    onClick={selectAllGpsActivities}
-                    className="text-neon-cyan hover:underline"
-                  >
-                    Select All ({candidates.length})
-                  </button>
-                  <span className="text-zinc-600">•</span>
+                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
                   <button
                     type="button"
                     onClick={selectAllValidLoops}
-                    className="text-zinc-300 hover:text-white hover:underline"
+                    className="rounded-lg border border-neon-lime/40 bg-neon-lime/10 px-2.5 py-1.5 font-bold text-neon-lime transition hover:bg-neon-lime/20"
                   >
-                    Auto-Loops Only
+                    Select All Valid
                   </button>
-                  <span className="text-zinc-600">•</span>
                   <button
                     type="button"
                     onClick={clearSelection}
-                    className="text-zinc-400 hover:text-white hover:underline"
+                    className="rounded-lg border border-border-subtle bg-carbon-900 px-2.5 py-1.5 font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white"
                   >
-                    Clear
+                    Deselect All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectAllGpsActivities}
+                    className="px-1.5 py-1 text-zinc-400 transition hover:text-neon-cyan hover:underline"
+                  >
+                    All GPS ({candidates.length})
                   </button>
                 </div>
               )}
@@ -981,7 +976,9 @@ export default function SyncReviewModal({
                   ) : (
                     <>
                       <Sparkles className="h-4 w-4" />
-                      <span>Import & Claim ({selectedIds.size})</span>
+                      <span>
+                        Claim Selected Activities ({selectedIds.size})
+                      </span>
                     </>
                   )}
                 </button>

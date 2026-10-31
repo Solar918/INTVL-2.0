@@ -67,6 +67,10 @@ export default function ConnectModal({
   const [stravaAthleteIdLocal, setStravaAthleteIdLocal] = useState<
     number | null
   >(currentAthlete?.stravaAthleteId ?? null);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(
+    currentAthlete?.autoSyncEnabled ?? true
+  );
+  const [isUpdatingAutoSync, setIsUpdatingAutoSync] = useState<boolean>(false);
 
   // Home Area state
   const [homeLat, setHomeLat] = useState<number | null>(homeArea?.lat ?? null);
@@ -87,6 +91,7 @@ export default function ConnectModal({
       setSelectedColor(currentAthlete.color);
       setStravaLinkedLocal(Boolean(currentAthlete.stravaConnected));
       setStravaAthleteIdLocal(currentAthlete.stravaAthleteId ?? null);
+      setAutoSyncEnabled(currentAthlete.autoSyncEnabled ?? true);
     }
     if (homeArea) {
       setHomeLat(homeArea.lat);
@@ -191,6 +196,44 @@ export default function ConnectModal({
     }
   };
 
+  const handleToggleAutoSync = async () => {
+    if (!isAuthenticated || isUpdatingAutoSync) return;
+    const nextValue = !autoSyncEnabled;
+    setAutoSyncEnabled(nextValue);
+    setIsUpdatingAutoSync(true);
+    setError(null);
+    setStatusMessage(null);
+
+    try {
+      const res = await fetch('/api/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoSyncEnabled: nextValue }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(
+          data.error || 'Failed to update Automatic Activity Sync setting.'
+        );
+      }
+      setStatusMessage(
+        nextValue
+          ? 'Automatic Activity Sync enabled.'
+          : 'Automatic Activity Sync disabled. Future Strava activities will wait in your manual sync queue.'
+      );
+      onProfileUpdated();
+    } catch (err) {
+      setAutoSyncEnabled(!nextValue);
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update Automatic Activity Sync setting.'
+      );
+    } finally {
+      setIsUpdatingAutoSync(false);
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAuthenticated) return;
@@ -220,6 +263,7 @@ export default function ConnectModal({
           homeLat: homeLat,
           homeLng: homeLng,
           homeZoom: homeZoom,
+          autoSyncEnabled,
         }),
       });
 
@@ -420,6 +464,40 @@ export default function ConnectModal({
                           <ExternalLink className="h-3.5 w-3.5 opacity-80" />
                         </a>
                       )}
+
+                      {/* Automatic Activity Sync Toggle */}
+                      <div className="mt-1 flex items-start justify-between gap-3 border-t border-border-subtle/70 pt-3">
+                        <div className="pr-2">
+                          <p className="font-mono text-xs font-bold text-white">
+                            Automatic Activity Sync
+                          </p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-400">
+                            When enabled, eligible walks and runs uploaded to Strava will automatically claim territory in your active round without manual review.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={autoSyncEnabled}
+                          aria-label="Automatic Activity Sync"
+                          disabled={isUpdatingAutoSync}
+                          onClick={handleToggleAutoSync}
+                          className={`relative mt-0.5 inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 disabled:opacity-50 ${
+                            autoSyncEnabled
+                              ? 'border-neon-lime/60 bg-neon-lime/25'
+                              : 'border-zinc-700 bg-carbon-900'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-5 w-5 transform rounded-full transition-transform duration-200 ${
+                              autoSyncEnabled
+                                ? 'translate-x-6 bg-neon-lime shadow-[0_0_10px_#b4ff00]'
+                                : 'translate-x-1 bg-zinc-400'
+                            }`}
+                          />
+                        </button>
+                      </div>
                     </div>
                   </div>
 

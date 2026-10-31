@@ -56,6 +56,7 @@ export interface LeaderboardEntry {
   color: string;
   stravaConnected: boolean;
   stravaAthleteId: number | null;
+  autoSyncEnabled?: boolean;
   activeCells: number;
   activeAreaKm2: number;
   dominancePercent: number;
@@ -103,6 +104,7 @@ export interface UserProfileData {
     colorHex: string;
     stravaConnected: boolean;
     stravaAthleteId: number | null;
+    autoSyncEnabled?: boolean;
     createdAt: string;
   };
   stats: {
@@ -169,6 +171,7 @@ const SCHEMA_SQL_STATEMENTS = [
     home_lat REAL,
     home_lng REAL,
     home_zoom INTEGER DEFAULT 14,
+    auto_sync_enabled INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
@@ -543,6 +546,13 @@ async function ensureDatabaseReady(db: D1Database): Promise<void> {
               await db
                 .prepare(
                   'ALTER TABLE users ADD COLUMN home_zoom INTEGER DEFAULT 14'
+                )
+                .run();
+            }
+            if (!userCols.includes('auto_sync_enabled')) {
+              await db
+                .prepare(
+                  'ALTER TABLE users ADD COLUMN auto_sync_enabled INTEGER NOT NULL DEFAULT 1'
                 )
                 .run();
             }
@@ -939,6 +949,7 @@ export async function updateUserProfile(
     homeLat?: number | null;
     homeLng?: number | null;
     homeZoom?: number | null;
+    autoSyncEnabled?: boolean | number;
   }
 ): Promise<schema.UserRecord | null> {
   const db = await getD1Database();
@@ -963,10 +974,16 @@ export async function updateUserProfile(
     updates.homeZoom !== undefined
       ? updates.homeZoom ?? 14
       : existing.homeZoom ?? 14;
+  const nextAutoSync =
+    updates.autoSyncEnabled !== undefined
+      ? updates.autoSyncEnabled
+        ? 1
+        : 0
+      : existing.autoSyncEnabled ?? 1;
 
   await db
     .prepare(
-      'UPDATE users SET display_name = ?, bio = ?, color_hex = ?, home_lat = ?, home_lng = ?, home_zoom = ? WHERE id = ?'
+      'UPDATE users SET display_name = ?, bio = ?, color_hex = ?, home_lat = ?, home_lng = ?, home_zoom = ?, auto_sync_enabled = ? WHERE id = ?'
     )
     .bind(
       nextDisplayName,
@@ -975,6 +992,7 @@ export async function updateUserProfile(
       nextHomeLat,
       nextHomeLng,
       nextHomeZoom,
+      nextAutoSync,
       userId
     )
     .run();
@@ -2279,7 +2297,7 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
 
   const usersRes = await db
     .prepare(
-      'SELECT id, username, display_name, bio, color_hex, strava_athlete_id, refresh_token FROM users'
+      'SELECT id, username, display_name, bio, color_hex, strava_athlete_id, refresh_token, auto_sync_enabled FROM users'
     )
     .all<Record<string, unknown>>();
 
@@ -2421,6 +2439,10 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
       color: String(u.color_hex ?? '#00f0ff'),
       stravaConnected: Boolean(stravaAthleteId && u.refresh_token),
       stravaAthleteId,
+      autoSyncEnabled:
+        u.auto_sync_enabled === undefined || u.auto_sync_enabled === null
+          ? true
+          : Number(u.auto_sync_enabled) !== 0,
       activeCells: heldCells.length,
       activeAreaKm2,
       dominancePercent:
@@ -2716,6 +2738,7 @@ export async function getUserProfileWithHistory(
       colorHex: user.colorHex,
       stravaConnected: Boolean(user.stravaAthleteId && user.refreshToken),
       stravaAthleteId: user.stravaAthleteId,
+      autoSyncEnabled: user.autoSyncEnabled !== 0,
       createdAt: user.createdAt,
     },
     stats: {
@@ -2763,6 +2786,12 @@ function mapRowToUserRecord(row: Record<string, unknown>): schema.UserRecord {
       row.home_zoom !== null && row.home_zoom !== undefined
         ? Number(row.home_zoom)
         : 14,
+    autoSyncEnabled:
+      row.auto_sync_enabled === undefined || row.auto_sync_enabled === null
+        ? 1
+        : Number(row.auto_sync_enabled) !== 0
+        ? 1
+        : 0,
     createdAt: String(row.created_at ?? ''),
   };
 }
