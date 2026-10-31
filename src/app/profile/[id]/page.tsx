@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   Clock,
   Edit3,
+  ExternalLink,
   Flame,
   Gauge,
   Hexagon,
@@ -40,6 +41,7 @@ import {
   TrendingUp,
   Unplug,
   UserCheck,
+  Users,
   X,
   Zap,
 } from 'lucide-react';
@@ -293,6 +295,8 @@ export default function UserProfilePage({
               ) : (
                 <a
                   href="/api/auth/strava"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex min-h-[48px] items-center gap-1.5 rounded-xl bg-strava-orange px-3.5 py-2 font-mono text-xs font-bold text-white shadow transition hover:bg-strava-hover"
                 >
                   <Zap className="h-3.5 w-3.5 fill-current" />
@@ -539,6 +543,8 @@ export default function UserProfilePage({
                   ) : (
                     <a
                       href="/api/auth/strava"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="inline-flex min-h-[48px] items-center gap-2 rounded-xl bg-strava-orange px-4 py-2.5 font-mono text-xs font-bold text-white shadow transition hover:bg-strava-hover"
                     >
                       <Zap className="h-4 w-4 fill-current" />
@@ -757,24 +763,46 @@ export default function UserProfilePage({
                               <Calendar className="h-2.5 w-2.5" />
                               {act.roundName || act.roundId}
                             </span>
+
+                            {act.isCoop && act.sharedLabel && (
+                              <span className="inline-flex items-center gap-1 rounded border border-neon-magenta/40 bg-neon-magenta/10 px-2 py-0.5 font-mono text-[10px] font-bold text-neon-magenta">
+                                <Users className="h-2.5 w-2.5" />
+                                {act.sharedLabel}
+                              </span>
+                            )}
                           </div>
 
                           <h3 className="mt-1.5 break-words text-base font-bold text-white sm:text-lg">
                             {act.name}
                           </h3>
 
-                          <p className="mt-0.5 font-mono text-xs text-zinc-400">
-                            Recorded {formatRelativeTime(act.startedAt)} •{' '}
-                            {new Date(act.startedAt).toLocaleDateString(
-                              'en-NZ',
-                              {
-                                weekday: 'short',
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                              }
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-xs text-zinc-400">
+                            <span>
+                              Recorded {formatRelativeTime(act.startedAt)} •{' '}
+                              {new Date(act.startedAt).toLocaleDateString(
+                                'en-NZ',
+                                {
+                                  weekday: 'short',
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric',
+                                }
+                              )}
+                            </span>
+                            {/^\d+$/.test(act.stravaActivityId) && (
+                              <a
+                                href={`https://www.strava.com/activities/${encodeURIComponent(
+                                  act.stravaActivityId
+                                )}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 font-bold text-strava-orange hover:underline"
+                              >
+                                <span>View on Strava</span>
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
                             )}
-                          </p>
+                          </div>
                         </div>
                       </div>
 

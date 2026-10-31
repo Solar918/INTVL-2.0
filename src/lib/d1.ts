@@ -5,6 +5,7 @@ import {
   processActivityCoordinates,
   calculateH3CellsAreaKm2,
   type CaptureMode,
+  type TerritoryCoOwner,
   type TerritoryFeatureProperties,
 } from './geo';
 import { AUCKLAND_DEFAULT_CENTER, normalizePlayerColor } from './utils';
@@ -73,6 +74,10 @@ export interface ActivityFeedItem {
   username: string;
   displayName: string;
   userColor: string;
+  copilotUserIds: string[];
+  coOwners: TerritoryCoOwner[];
+  isCoop: boolean;
+  sharedLabel?: string;
   name: string;
   sportType: string;
   distanceMeters: number;
@@ -117,6 +122,7 @@ export interface IngestActivityInput {
   stravaActivityId: string;
   roundId: string;
   userId: string;
+  copilotUserIds?: string[];
   name: string;
   sportType?: string;
   distanceMeters?: number;
@@ -137,6 +143,10 @@ export interface IngestActivityOutput {
   cellsCaptured: number;
   cellsStolen: number;
   cellsProtectedByChronology?: number;
+  copilotUserIds: string[];
+  coOwners: TerritoryCoOwner[];
+  isCoop: boolean;
+  sharedLabel?: string;
   recordedAt?: string;
   areaKm2: number;
   distanceMeters: number;
@@ -202,6 +212,7 @@ const SCHEMA_SQL_STATEMENTS = [
     area_km2 REAL NOT NULL DEFAULT 0,
     route_geojson TEXT NOT NULL,
     h3_indices_json TEXT NOT NULL DEFAULT '[]',
+    copilot_user_ids TEXT DEFAULT '[]',
     start_lat REAL,
     start_lng REAL,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -217,6 +228,8 @@ const SCHEMA_SQL_STATEMENTS = [
     round_id TEXT NOT NULL,
     h3_index TEXT NOT NULL,
     owner_id TEXT NOT NULL,
+    owner_ids TEXT NOT NULL DEFAULT '[]',
+    owner_colors TEXT NOT NULL DEFAULT '[]',
     activity_id TEXT NOT NULL,
     captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (round_id, h3_index),
@@ -228,6 +241,16 @@ const SCHEMA_SQL_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_territories_owner_id ON territories(round_id, owner_id)`,
   `CREATE INDEX IF NOT EXISTS idx_territories_activity_id ON territories(activity_id)`,
   `CREATE INDEX IF NOT EXISTS idx_territories_captured_at ON territories(captured_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS territory_owners (
+    round_id TEXT NOT NULL,
+    h3_index TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (round_id, h3_index, user_id),
+    FOREIGN KEY (round_id) REFERENCES rounds(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_territory_owners_round_user ON territory_owners(round_id, user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_territory_owners_cell ON territory_owners(round_id, h3_index)`,
 ];
 
 let localD1Singleton: D1Database | null = null;
@@ -573,8 +596,58 @@ async function ensureDatabaseReady(db: D1Database): Promise<void> {
             )
             .run();
         }
+        if (actCols.length > 0 && !actCols.includes('copilot_user_ids')) {
+          await db
+            .prepare(
+              "ALTER TABLE activities ADD COLUMN copilot_user_ids TEXT DEFAULT '[]'"
+            )
+            .run();
+        }
       } catch {
         // Ignore if activities table inspection fails
+      }
+
+      try {
+        const terrColsRes = await db
+          .prepare('PRAGMA table_info(territories)')
+          .all<{ name: string }>();
+        const terrCols = (terrColsRes.results ?? []).map((c) => c.name);
+        if (terrCols.length > 0 && !terrCols.includes('owner_ids')) {
+          await db
+            .prepare(
+              "ALTER TABLE territories ADD COLUMN owner_ids TEXT NOT NULL DEFAULT '[]'"
+            )
+            .run();
+        }
+        if (terrCols.length > 0 && !terrCols.includes('owner_colors')) {
+          await db
+            .prepare(
+              "ALTER TABLE territories ADD COLUMN owner_colors TEXT NOT NULL DEFAULT '[]'"
+            )
+            .run();
+        }
+      } catch {
+        // Ignore if territories table inspection fails
+      }
+
+      // Backfill territory_owners & owner_ids / owner_colors for existing single-owner rows
+      try {
+        await db
+          .prepare(
+            `UPDATE territories
+             SET owner_ids = json_array(owner_id)
+             WHERE owner_ids = '[]' OR owner_ids IS NULL OR owner_ids = ''`
+          )
+          .run();
+
+        await db
+          .prepare(
+            `INSERT OR IGNORE INTO territory_owners (round_id, h3_index, user_id)
+             SELECT round_id, h3_index, owner_id FROM territories`
+          )
+          .run();
+      } catch {
+        // Ignore if empty
       }
 
       // 5. Backfill any territories whose captured_at differed from their parent activity's physical started_at
@@ -1053,6 +1126,25 @@ export async function getActiveOrSpecifiedRound(
   return active ?? allRounds[0];
 }
 
+/**
+ * Resolves the active non-concluded round for a specific athlete (used by Strava background webhooks).
+ * Prefers an active round where the user is an enrolled participant, falling back to the primary active round.
+ */
+export async function getActiveRoundForUser(
+  userId: string
+): Promise<RoundSummary | null> {
+  const allRounds = await getAllRounds();
+  const activeRounds = allRounds.filter(
+    (r) => r.status === 'active' && !r.isConcluded
+  );
+  if (activeRounds.length === 0) return null;
+
+  const enrolledRound = activeRounds.find((r) =>
+    r.participantIds.includes(userId)
+  );
+  return enrolledRound ?? activeRounds[0];
+}
+
 export async function createRound(params: {
   name: string;
   description?: string;
@@ -1225,16 +1317,126 @@ export function parseUtcTimestampMs(raw?: string | null): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+function parseJsonStringArray(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return Array.from(
+        new Set(
+          parsed
+            .map((v) => String(v ?? '').trim())
+            .filter((v) => v.length > 0)
+        )
+      );
+    }
+  } catch {
+    // Ignore invalid JSON
+  }
+  return [];
+}
+
+export function formatSharedOwnershipLabel(names: string[]): string {
+  const clean = names.filter(Boolean);
+  if (clean.length === 0) return 'Player';
+  if (clean.length === 1) return clean[0];
+  if (clean.length === 2) return `Shared by ${clean[0]} & ${clean[1]}`;
+  return `Shared by ${clean.slice(0, -1).join(', ')} & ${clean[clean.length - 1]}`;
+}
+
+export function buildStripePatternId(colors: string[]): string {
+  if (colors.length < 2) return '';
+  const sanitized = colors
+    .slice(0, 3)
+    .map((c) => c.replace(/[^a-zA-Z0-9]/g, '').toLowerCase());
+  return `co-op-stripe-${sanitized.join('-')}`;
+}
+
+async function resolveCoOwnersByIds(
+  db: D1Database,
+  primaryUserId: string,
+  copilotUserIds: string[]
+): Promise<{
+  allOwnerIds: string[];
+  cleanCopilotIds: string[];
+  allOwnerColors: string[];
+  coOwners: TerritoryCoOwner[];
+  sharedLabel?: string;
+}> {
+  const cleanCopilots = Array.from(
+    new Set(
+      (copilotUserIds ?? [])
+        .map((id) => String(id ?? '').trim())
+        .filter((id) => id.length > 0 && id !== primaryUserId)
+    )
+  );
+  const candidateIds = [primaryUserId, ...cleanCopilots];
+  const placeholders = candidateIds.map(() => '?').join(', ');
+
+  const usersRes = await db
+    .prepare(
+      `SELECT id, username, display_name, color_hex FROM users WHERE id IN (${placeholders})`
+    )
+    .bind(...candidateIds)
+    .all<Record<string, unknown>>();
+
+  const userById = new Map<string, TerritoryCoOwner>();
+  for (const r of usersRes.results ?? []) {
+    const uid = String(r.id);
+    const uname = String(r.username ?? 'player');
+    userById.set(uid, {
+      userId: uid,
+      username: uname,
+      displayName: String(r.display_name || uname || 'Player'),
+      colorHex: String(r.color_hex ?? '#00f0ff'),
+    });
+  }
+
+  const coOwners: TerritoryCoOwner[] = [];
+  for (const uid of candidateIds) {
+    const found = userById.get(uid);
+    if (found) {
+      coOwners.push(found);
+    }
+  }
+
+  if (coOwners.length === 0) {
+    coOwners.push({
+      userId: primaryUserId,
+      username: 'player',
+      displayName: 'Player',
+      colorHex: '#00f0ff',
+    });
+  }
+
+  const validOwnerIds = coOwners.map((o) => o.userId);
+  const validCopilots = validOwnerIds.filter((id) => id !== primaryUserId);
+  const allOwnerColors = coOwners.map((o) => o.colorHex);
+  const sharedLabel =
+    coOwners.length > 1
+      ? formatSharedOwnershipLabel(coOwners.map((o) => o.displayName))
+      : undefined;
+
+  return {
+    allOwnerIds: validOwnerIds,
+    cleanCopilotIds: validCopilots,
+    allOwnerColors,
+    coOwners,
+    sharedLabel,
+  };
+}
+
 /**
  * Core Territory Capture & Chronological Steal Transaction (Isolated per Round):
  * 1. Enforces Hard Lock Ingestion Rule (`isRoundLockedForIngestion`).
  * 2. Processes raw GPS `[lat, lng][]` stream via `processActivityCoordinates`.
  * 3. Preserves the physical activity timestamp (`recordedAtSql = normalizeUtcSqlTimestamp(input.startedAt)`).
- * 4. Enforces Chronological Ownership Resolution (No Retroactive Stealing):
- *    An incoming walk only claims or steals an H3 cell if the cell is unclaimed OR
- *    `new_activity.recorded_at > existing_territory.captured_at`.
- * 5. Permanently records the activity, its `route_geojson`, and its full covered `h3_indices_json` in `activities`.
- * 6. Writes won H3 cells into `territories` with `captured_at = recordedAtSql` (never `CURRENT_TIMESTAMP`).
+ * 4. Enforces Chronological Ownership Resolution (No Retroactive Stealing) & Co-op Joint Ownership:
+ *    - When `copilotUserIds` are tagged, all co-walkers share ownership of captured H3 cells (`owner_ids`, `owner_colors`, `territory_owners`).
+ *    - An incoming walk claims or steals an H3 cell if the cell is unclaimed OR `new_activity.recorded_at > existing_territory.captured_at`.
+ *    - If a competitor walks through shared co-op territory later (`recorded_at > captured_at`), they chronologically steal it from all co-owners.
+ * 5. Permanently records the activity, its `route_geojson`, `copilot_user_ids`, and its full covered `h3_indices_json` in `activities`.
+ * 6. Writes won H3 cells into `territories` and `territory_owners` with `captured_at = recordedAtSql`.
  */
 export async function ingestActivityStream(
   input: IngestActivityInput
@@ -1255,9 +1457,17 @@ export async function ingestActivityStream(
     .first<Record<string, unknown>>();
 
   const hasExplicitOverride =
-    input.forceLoop !== undefined || input.captureModeOverride !== undefined;
+    input.forceLoop !== undefined ||
+    input.captureModeOverride !== undefined ||
+    input.copilotUserIds !== undefined;
 
   if (existing && !hasExplicitOverride) {
+    const existingCopilots = parseJsonStringArray(existing.copilot_user_ids);
+    const resolvedExisting = await resolveCoOwnersByIds(
+      db,
+      String(existing.user_id),
+      existingCopilots
+    );
     return {
       activityId: String(existing.id),
       stravaActivityId: String(existing.strava_activity_id),
@@ -1267,6 +1477,10 @@ export async function ingestActivityStream(
       cellsCaptured: Number(existing.cells_captured ?? 0),
       cellsStolen: Number(existing.cells_stolen ?? 0),
       cellsProtectedByChronology: 0,
+      copilotUserIds: resolvedExisting.cleanCopilotIds,
+      coOwners: resolvedExisting.coOwners,
+      isCoop: resolvedExisting.coOwners.length > 1,
+      sharedLabel: resolvedExisting.sharedLabel,
       recordedAt: String(existing.started_at ?? ''),
       areaKm2: Number(existing.area_km2 ?? 0),
       distanceMeters: Number(existing.distance_meters ?? 0),
@@ -1277,6 +1491,19 @@ export async function ingestActivityStream(
       alreadyProcessed: true,
     };
   }
+
+  const requestedCopilots =
+    input.copilotUserIds !== undefined
+      ? input.copilotUserIds
+      : existing
+        ? parseJsonStringArray(existing.copilot_user_ids)
+        : [];
+
+  const resolvedCoop = await resolveCoOwnersByIds(
+    db,
+    input.userId,
+    requestedCopilots
+  );
 
   const spatial = processActivityCoordinates(input.latLngStream, {
     forceLoop: input.forceLoop,
@@ -1303,16 +1530,28 @@ export async function ingestActivityStream(
   const recordedAtSql = normalizeUtcSqlTimestamp(input.startedAt);
   const recordedAtMs = parseUtcTimestampMs(recordedAtSql);
 
-  // Ensure the player is registered as a participant in this round
-  await db
-    .prepare(
-      'INSERT OR IGNORE INTO round_participants (round_id, user_id) VALUES (?, ?)'
-    )
-    .bind(input.roundId, input.userId)
-    .run();
+  // Ensure the player and any tagged co-walkers are registered as participants in this round
+  for (const participantUid of resolvedCoop.allOwnerIds) {
+    await db
+      .prepare(
+        'INSERT OR IGNORE INTO round_participants (round_id, user_id) VALUES (?, ?)'
+      )
+      .bind(input.roundId, participantUid)
+      .run();
+  }
 
   // If re-importing the same activity with an explicit override, clear its prior territory claims first
   if (existing && hasExplicitOverride) {
+    await db
+      .prepare(
+        `DELETE FROM territory_owners
+         WHERE round_id = ? AND h3_index IN (
+           SELECT h3_index FROM territories WHERE round_id = ? AND activity_id = ?
+         )`
+      )
+      .bind(input.roundId, input.roundId, compositeActivityId)
+      .run();
+
     await db
       .prepare('DELETE FROM territories WHERE round_id = ? AND activity_id = ?')
       .bind(input.roundId, compositeActivityId)
@@ -1324,6 +1563,7 @@ export async function ingestActivityStream(
     string,
     {
       ownerId: string;
+      ownerIds: string[];
       activityId: string;
       capturedAt: string;
       capturedAtMs: number;
@@ -1336,7 +1576,7 @@ export async function ingestActivityStream(
     const placeholders = slice.map(() => '?').join(', ');
     const existingRows = await db
       .prepare(
-        `SELECT h3_index, owner_id, activity_id, captured_at
+        `SELECT h3_index, owner_id, owner_ids, activity_id, captured_at
          FROM territories
          WHERE round_id = ? AND h3_index IN (${placeholders})`
       )
@@ -1344,6 +1584,7 @@ export async function ingestActivityStream(
       .all<{
         h3_index: string;
         owner_id: string;
+        owner_ids?: string;
         activity_id: string;
         captured_at: string;
       }>();
@@ -1351,8 +1592,11 @@ export async function ingestActivityStream(
     for (const row of existingRows.results ?? []) {
       const cellId = String(row.h3_index);
       const capturedAtStr = String(row.captured_at ?? '');
+      const parsedOwners = parseJsonStringArray(row.owner_ids);
+      const primaryOwner = String(row.owner_id);
       existingCellsMap.set(cellId, {
-        ownerId: String(row.owner_id),
+        ownerId: primaryOwner,
+        ownerIds: parsedOwners.length > 0 ? parsedOwners : [primaryOwner],
         activityId: String(row.activity_id),
         capturedAt: capturedAtStr,
         capturedAtMs: parseUtcTimestampMs(capturedAtStr),
@@ -1361,8 +1605,15 @@ export async function ingestActivityStream(
   }
 
   const winningH3Indices: string[] = [];
+  // Map of cell -> resolved co-owners for that cell (handles merging when a tagged co-walker uploads their own GPS log of the same walk)
+  const cellOwnersOverrideMap = new Map<
+    string,
+    { ownerIds: string[]; ownerColors: string[] }
+  >();
   let cellsStolen = 0;
   let cellsProtectedByChronology = 0;
+
+  const incomingOwnerSet = new Set(resolvedCoop.allOwnerIds);
 
   for (const h3Index of h3Indices) {
     const existingCell = existingCellsMap.get(h3Index);
@@ -1372,19 +1623,53 @@ export async function ingestActivityStream(
     } else if (existingCell.activityId === compositeActivityId) {
       // Same activity being re-processed
       winningH3Indices.push(h3Index);
-    } else if (recordedAtMs > existingCell.capturedAtMs) {
-      // Incoming walk is chronologically MORE RECENT than the existing cell capture
-      winningH3Indices.push(h3Index);
-      if (existingCell.ownerId !== input.userId) {
-        cellsStolen += 1;
-      }
     } else {
-      // Existing cell was captured by a MORE RECENT walk -> cannot retroactively steal/overwrite
-      cellsProtectedByChronology += 1;
+      const sharesCoOwner = existingCell.ownerIds.some((id) =>
+        incomingOwnerSet.has(id)
+      );
+      const timeDiffMinutes =
+        Math.abs(recordedAtMs - existingCell.capturedAtMs) / 60000;
+
+      // If this cell is already co-owned with one of the current walk's co-owners and recorded within 45 mins (same group walk),
+      // preserve/merge the joint ownership so neither co-walker overwrites the other!
+      if (
+        sharesCoOwner &&
+        (existingCell.ownerIds.length > 1 || resolvedCoop.allOwnerIds.length > 1) &&
+        timeDiffMinutes <= 45
+      ) {
+        const mergedIds = Array.from(
+          new Set([...existingCell.ownerIds, ...resolvedCoop.allOwnerIds])
+        );
+        const mergedResolved = await resolveCoOwnersByIds(
+          db,
+          mergedIds[0],
+          mergedIds.slice(1)
+        );
+        cellOwnersOverrideMap.set(h3Index, {
+          ownerIds: mergedResolved.allOwnerIds,
+          ownerColors: mergedResolved.allOwnerColors,
+        });
+        winningH3Indices.push(h3Index);
+      } else if (recordedAtMs > existingCell.capturedAtMs) {
+        // Incoming walk is chronologically MORE RECENT than the existing cell capture
+        winningH3Indices.push(h3Index);
+        const isPureSelfRefresh =
+          existingCell.ownerIds.length === 1 &&
+          existingCell.ownerIds[0] === input.userId;
+        if (!isPureSelfRefresh && !sharesCoOwner) {
+          cellsStolen += 1;
+        }
+      } else {
+        // Existing cell was captured by a MORE RECENT walk -> cannot retroactively steal/overwrite
+        cellsProtectedByChronology += 1;
+      }
     }
   }
 
   const wonAreaKm2 = calculateH3CellsAreaKm2(winningH3Indices);
+  const copilotIdsJson = JSON.stringify(resolvedCoop.cleanCopilotIds);
+  const defaultOwnerIdsJson = JSON.stringify(resolvedCoop.allOwnerIds);
+  const defaultOwnerColorsJson = JSON.stringify(resolvedCoop.allOwnerColors);
 
   await db
     .prepare(
@@ -1392,8 +1677,8 @@ export async function ingestActivityStream(
         id, strava_activity_id, round_id, user_id, name, sport_type,
         distance_meters, moving_time_seconds, capture_mode,
         cells_captured, cells_stolen, area_km2, route_geojson, h3_indices_json,
-        start_lat, start_lng, started_at, processed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+        copilot_user_ids, start_lat, start_lng, started_at, processed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
     )
     .bind(
       compositeActivityId,
@@ -1410,6 +1695,7 @@ export async function ingestActivityStream(
       wonAreaKm2,
       JSON.stringify(spatial.simplifiedRouteGeoJSON),
       JSON.stringify(h3Indices),
+      copilotIdsJson,
       spatial.startLat,
       spatial.startLng,
       recordedAtSql
@@ -1418,31 +1704,64 @@ export async function ingestActivityStream(
 
   // Chronological Upsert isolated per round:
   // Stores the physical activity timestamp (`recordedAtSql`) as `captured_at`
-  // and enforces `datetime(excluded.captured_at) > datetime(territories.captured_at)` at the SQLite level.
-  const BATCH_LIMIT = 50;
+  // along with `owner_ids`, `owner_colors`, and normalized `territory_owners` rows.
+  const BATCH_LIMIT = 25;
   for (let i = 0; i < winningH3Indices.length; i += BATCH_LIMIT) {
     const chunk = winningH3Indices.slice(i, i + BATCH_LIMIT);
-    const statements = chunk.map((h3Index) =>
-      db
-        .prepare(
-          `INSERT INTO territories (round_id, h3_index, owner_id, activity_id, captured_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(round_id, h3_index) DO UPDATE SET
-             owner_id = excluded.owner_id,
-             activity_id = excluded.activity_id,
-             captured_at = excluded.captured_at
-           WHERE datetime(excluded.captured_at) > datetime(territories.captured_at)
-              OR territories.activity_id = excluded.activity_id`
-        )
-        .bind(
-          input.roundId,
-          h3Index,
-          input.userId,
-          compositeActivityId,
-          recordedAtSql
-        )
-    );
-    await db.batch(statements);
+    const statements: Array<{ run: () => Promise<unknown> }> = [];
+
+    for (const h3Index of chunk) {
+      const override = cellOwnersOverrideMap.get(h3Index);
+      const cellOwnerIds = override ? override.ownerIds : resolvedCoop.allOwnerIds;
+      const cellOwnerColors = override
+        ? override.ownerColors
+        : resolvedCoop.allOwnerColors;
+
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO territories (round_id, h3_index, owner_id, owner_ids, owner_colors, activity_id, captured_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(round_id, h3_index) DO UPDATE SET
+               owner_id = excluded.owner_id,
+               owner_ids = excluded.owner_ids,
+               owner_colors = excluded.owner_colors,
+               activity_id = excluded.activity_id,
+               captured_at = excluded.captured_at
+             WHERE datetime(excluded.captured_at) >= datetime(territories.captured_at)
+                OR territories.activity_id = excluded.activity_id`
+          )
+          .bind(
+            input.roundId,
+            h3Index,
+            input.userId,
+            override ? JSON.stringify(cellOwnerIds) : defaultOwnerIdsJson,
+            override ? JSON.stringify(cellOwnerColors) : defaultOwnerColorsJson,
+            compositeActivityId,
+            recordedAtSql
+          )
+      );
+
+      statements.push(
+        db
+          .prepare(
+            'DELETE FROM territory_owners WHERE round_id = ? AND h3_index = ?'
+          )
+          .bind(input.roundId, h3Index)
+      );
+
+      for (const ownerUid of cellOwnerIds) {
+        statements.push(
+          db
+            .prepare(
+              'INSERT OR IGNORE INTO territory_owners (round_id, h3_index, user_id) VALUES (?, ?, ?)'
+            )
+            .bind(input.roundId, h3Index, ownerUid)
+        );
+      }
+    }
+
+    await db.batch(statements as Parameters<typeof db.batch>[0]);
   }
 
   return {
@@ -1454,11 +1773,154 @@ export async function ingestActivityStream(
     cellsCaptured: winningH3Indices.length,
     cellsStolen,
     cellsProtectedByChronology,
+    copilotUserIds: resolvedCoop.cleanCopilotIds,
+    coOwners: resolvedCoop.coOwners,
+    isCoop: resolvedCoop.coOwners.length > 1,
+    sharedLabel: resolvedCoop.sharedLabel,
     recordedAt: recordedAtSql,
     areaKm2: wonAreaKm2,
     distanceMeters: finalDistance,
     centroid: spatial.centroid,
     alreadyProcessed: false,
+  };
+}
+
+/**
+ * Updates the "Walked with Friends" co-owners (`copilot_user_ids`) for an already-imported activity,
+ * and updates all H3 cells currently held by that activity in `territories` and `territory_owners`.
+ */
+export async function updateActivityCopilots(params: {
+  activityId: string;
+  requesterUserId: string;
+  copilotUserIds: string[];
+}): Promise<{
+  activityId: string;
+  roundId: string;
+  copilotUserIds: string[];
+  coOwners: TerritoryCoOwner[];
+  isCoop: boolean;
+  sharedLabel?: string;
+  cellsUpdated: number;
+}> {
+  const db = await getD1Database();
+  const decodedId = decodeURIComponent(params.activityId);
+
+  let activityRow = await db
+    .prepare('SELECT * FROM activities WHERE id = ?')
+    .bind(decodedId)
+    .first<Record<string, unknown>>();
+
+  if (!activityRow) {
+    activityRow = await db
+      .prepare(
+        'SELECT * FROM activities WHERE strava_activity_id = ? ORDER BY processed_at DESC LIMIT 1'
+      )
+      .bind(decodedId)
+      .first<Record<string, unknown>>();
+  }
+
+  if (!activityRow) {
+    const err = new Error('Activity not found.') as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetActivityId = String(activityRow.id);
+  const targetRoundId = String(activityRow.round_id);
+  const activityOwnerId = String(activityRow.user_id);
+
+  const round = await getActiveOrSpecifiedRound(targetRoundId);
+  const isOwner = activityOwnerId === params.requesterUserId;
+  const isRoundAdmin = Boolean(
+    round.createdBy && round.createdBy === params.requesterUserId
+  );
+
+  if (!isOwner && !isRoundAdmin) {
+    const err = new Error(
+      'Forbidden: Only the activity owner or the round admin can update co-walkers on this activity.'
+    ) as Error & { statusCode?: number };
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const resolvedCoop = await resolveCoOwnersByIds(
+    db,
+    activityOwnerId,
+    params.copilotUserIds
+  );
+
+  // Enroll any newly tagged friends in the round
+  for (const uid of resolvedCoop.allOwnerIds) {
+    await db
+      .prepare(
+        'INSERT OR IGNORE INTO round_participants (round_id, user_id) VALUES (?, ?)'
+      )
+      .bind(targetRoundId, uid)
+      .run();
+  }
+
+  await db
+    .prepare('UPDATE activities SET copilot_user_ids = ? WHERE id = ?')
+    .bind(JSON.stringify(resolvedCoop.cleanCopilotIds), targetActivityId)
+    .run();
+
+  const heldCellsRes = await db
+    .prepare(
+      'SELECT h3_index FROM territories WHERE round_id = ? AND activity_id = ?'
+    )
+    .bind(targetRoundId, targetActivityId)
+    .all<{ h3_index: string }>();
+
+  const heldCells = (heldCellsRes.results ?? []).map((r) => String(r.h3_index));
+  const ownerIdsJson = JSON.stringify(resolvedCoop.allOwnerIds);
+  const ownerColorsJson = JSON.stringify(resolvedCoop.allOwnerColors);
+
+  await db
+    .prepare(
+      `UPDATE territories
+       SET owner_ids = ?, owner_colors = ?
+       WHERE round_id = ? AND activity_id = ?`
+    )
+    .bind(ownerIdsJson, ownerColorsJson, targetRoundId, targetActivityId)
+    .run();
+
+  const BATCH_LIMIT = 25;
+  for (let i = 0; i < heldCells.length; i += BATCH_LIMIT) {
+    const chunk = heldCells.slice(i, i + BATCH_LIMIT);
+    const statements: Array<{ run: () => Promise<unknown> }> = [];
+
+    for (const h3Index of chunk) {
+      statements.push(
+        db
+          .prepare(
+            'DELETE FROM territory_owners WHERE round_id = ? AND h3_index = ?'
+          )
+          .bind(targetRoundId, h3Index)
+      );
+      for (const uid of resolvedCoop.allOwnerIds) {
+        statements.push(
+          db
+            .prepare(
+              'INSERT OR IGNORE INTO territory_owners (round_id, h3_index, user_id) VALUES (?, ?, ?)'
+            )
+            .bind(targetRoundId, h3Index, uid)
+        );
+      }
+    }
+
+    await db.batch(statements as Parameters<typeof db.batch>[0]);
+  }
+
+  return {
+    activityId: targetActivityId,
+    roundId: targetRoundId,
+    copilotUserIds: resolvedCoop.cleanCopilotIds,
+    coOwners: resolvedCoop.coOwners,
+    isCoop: resolvedCoop.coOwners.length > 1,
+    sharedLabel: resolvedCoop.sharedLabel,
+    cellsUpdated: heldCells.length,
   };
 }
 
@@ -1564,7 +2026,7 @@ export async function deleteActivityAndRollbackState(params: {
   // 2. Load remaining valid activities in this round ordered newest-first (`ORDER BY datetime(started_at) DESC`)
   const remainingActivitiesRes = await db
     .prepare(
-      `SELECT id, user_id, started_at, capture_mode, route_geojson, h3_indices_json
+      `SELECT id, user_id, copilot_user_ids, started_at, capture_mode, route_geojson, h3_indices_json
        FROM activities
        WHERE round_id = ? AND id != ?
        ORDER BY datetime(started_at) DESC, datetime(processed_at) DESC`
@@ -1572,13 +2034,33 @@ export async function deleteActivityAndRollbackState(params: {
     .bind(targetRoundId, targetActivityId)
     .all<Record<string, unknown>>();
 
+  const usersLookupRes = await db
+    .prepare('SELECT id, color_hex FROM users')
+    .all<{ id: string; color_hex: string }>();
+  const colorByUserId = new Map<string, string>();
+  for (const u of usersLookupRes.results ?? []) {
+    colorByUserId.set(String(u.id), String(u.color_hex ?? '#00f0ff'));
+  }
+
   const candidatePrecedingActivities = (remainingActivitiesRes.results ?? []).map(
-    (r) => ({
-      id: String(r.id),
-      userId: String(r.user_id),
-      startedAt: normalizeUtcSqlTimestamp(String(r.started_at ?? '')),
-      coveredCells: resolveCoveredH3SetForActivityRow(r),
-    })
+    (r) => {
+      const primaryUid = String(r.user_id);
+      const copilots = parseJsonStringArray(r.copilot_user_ids).filter(
+        (id) => id !== primaryUid && colorByUserId.has(id)
+      );
+      const ownerIds = [primaryUid, ...copilots];
+      const ownerColors = ownerIds.map(
+        (uid) => colorByUserId.get(uid) ?? '#00f0ff'
+      );
+      return {
+        id: String(r.id),
+        userId: primaryUid,
+        ownerIds,
+        ownerColors,
+        startedAt: normalizeUtcSqlTimestamp(String(r.started_at ?? '')),
+        coveredCells: resolveCoveredH3SetForActivityRow(r),
+      };
+    }
   );
 
   let cellsReverted = 0;
@@ -1592,23 +2074,42 @@ export async function deleteActivityAndRollbackState(params: {
       cand.coveredCells.has(h3Index)
     );
 
+    statements.push(
+      db
+        .prepare(
+          'DELETE FROM territory_owners WHERE round_id = ? AND h3_index = ?'
+        )
+        .bind(targetRoundId, h3Index)
+    );
+
     if (preceding) {
       cellsReverted += 1;
       statements.push(
         db
           .prepare(
             `UPDATE territories
-             SET owner_id = ?, activity_id = ?, captured_at = ?
+             SET owner_id = ?, owner_ids = ?, owner_colors = ?, activity_id = ?, captured_at = ?
              WHERE round_id = ? AND h3_index = ?`
           )
           .bind(
             preceding.userId,
+            JSON.stringify(preceding.ownerIds),
+            JSON.stringify(preceding.ownerColors),
             preceding.id,
             preceding.startedAt,
             targetRoundId,
             h3Index
           )
       );
+      for (const uid of preceding.ownerIds) {
+        statements.push(
+          db
+            .prepare(
+              'INSERT OR IGNORE INTO territory_owners (round_id, h3_index, user_id) VALUES (?, ?, ?)'
+            )
+            .bind(targetRoundId, h3Index, uid)
+        );
+      }
     } else {
       cellsCleared += 1;
       statements.push(
@@ -1621,7 +2122,7 @@ export async function deleteActivityAndRollbackState(params: {
     }
   }
 
-  const BATCH_LIMIT = 50;
+  const BATCH_LIMIT = 40;
   for (let i = 0; i < statements.length; i += BATCH_LIMIT) {
     await db.batch(
       statements.slice(i, i + BATCH_LIMIT) as Parameters<typeof db.batch>[0]
@@ -1645,7 +2146,7 @@ export async function deleteActivityAndRollbackState(params: {
 }
 
 /**
- * Fetches all captured territories for a specific Round joined with owner and activity metadata.
+ * Fetches all captured territories for a specific Round joined with owner, co-owners, and activity metadata.
  */
 export async function getAllTerritories(
   roundId?: string | null
@@ -1653,19 +2154,38 @@ export async function getAllTerritories(
   const db = await getD1Database();
   const targetRound = await getActiveOrSpecifiedRound(roundId);
 
+  const usersRes = await db
+    .prepare('SELECT id, username, display_name, color_hex FROM users')
+    .all<Record<string, unknown>>();
+  const userMap = new Map<string, TerritoryCoOwner>();
+  for (const u of usersRes.results ?? []) {
+    const uid = String(u.id);
+    const uname = String(u.username ?? 'player');
+    userMap.set(uid, {
+      userId: uid,
+      username: uname,
+      displayName: String(u.display_name || uname || 'Player'),
+      colorHex: String(u.color_hex ?? '#00f0ff'),
+    });
+  }
+
   const res = await db
     .prepare(
       `SELECT
         t.round_id,
         t.h3_index,
         t.owner_id,
+        t.owner_ids,
+        t.owner_colors,
         t.activity_id,
         t.captured_at,
         u.username,
         u.display_name,
         u.color_hex,
         a.name AS activity_name,
-        a.capture_mode
+        a.strava_activity_id,
+        a.capture_mode,
+        a.copilot_user_ids
       FROM territories t
       INNER JOIN users u ON u.id = t.owner_id
       LEFT JOIN activities a ON a.id = t.activity_id
@@ -1676,23 +2196,77 @@ export async function getAllTerritories(
     .all<Record<string, unknown>>();
 
   const rows = res.results ?? [];
-  return rows.map((r) => ({
-    h3Index: String(r.h3_index),
-    roundId: String(r.round_id),
-    ownerId: String(r.owner_id),
-    ownerUsername: String(r.username ?? 'unknown'),
-    ownerDisplayName: String(r.display_name || r.username || 'Player'),
-    ownerColor: String(r.color_hex ?? '#00f0ff'),
-    activityId: String(r.activity_id),
-    activityName: String(r.activity_name ?? 'Loop Conquest'),
-    captureMode: (r.capture_mode as CaptureMode) || 'loop',
-    capturedAt: String(r.captured_at),
-    areaKm2: 0.1053,
-  }));
+  return rows.map((r) => {
+    const primaryOwnerId = String(r.owner_id);
+    const primaryOwnerColor = String(r.color_hex ?? '#00f0ff');
+    const primaryUsername = String(r.username ?? 'unknown');
+    const primaryDisplayName = String(
+      r.display_name || r.username || 'Player'
+    );
+
+    const parsedOwnerIds = parseJsonStringArray(r.owner_ids);
+    const copilotIds = parseJsonStringArray(r.copilot_user_ids);
+    const rawCandidateIds =
+      parsedOwnerIds.length > 0
+        ? parsedOwnerIds
+        : [primaryOwnerId, ...copilotIds];
+    const uniqueOwnerIds = Array.from(
+      new Set([primaryOwnerId, ...rawCandidateIds])
+    );
+
+    const coOwners: TerritoryCoOwner[] = uniqueOwnerIds.map((uid) => {
+      const found = userMap.get(uid);
+      if (found) return found;
+      return {
+        userId: uid,
+        username: uid === primaryOwnerId ? primaryUsername : 'player',
+        displayName: uid === primaryOwnerId ? primaryDisplayName : 'Player',
+        colorHex: uid === primaryOwnerId ? primaryOwnerColor : '#00f0ff',
+      };
+    });
+
+    const ownerIds = coOwners.map((o) => o.userId);
+    const ownerDisplayNames = coOwners.map((o) => o.displayName);
+    const ownerColors = coOwners.map((o) => o.colorHex);
+    const isShared = coOwners.length > 1;
+    const secondaryColor = isShared ? ownerColors[1] : primaryOwnerColor;
+    const sharedLabel = isShared
+      ? formatSharedOwnershipLabel(ownerDisplayNames)
+      : primaryDisplayName;
+    const stripePatternId = isShared ? buildStripePatternId(ownerColors) : '';
+
+    return {
+      h3Index: String(r.h3_index),
+      roundId: String(r.round_id),
+      ownerId: primaryOwnerId,
+      ownerUsername: primaryUsername,
+      ownerDisplayName: primaryDisplayName,
+      ownerColor: primaryOwnerColor,
+      ownerIds,
+      ownerIdsCsv: `,${ownerIds.join(',')},`,
+      ownerDisplayNames,
+      ownerColors,
+      ownersJson: JSON.stringify(coOwners),
+      isShared,
+      ownerCount: coOwners.length,
+      secondaryColor,
+      sharedLabel,
+      stripePatternId,
+      activityId: String(r.activity_id),
+      stravaActivityId: r.strava_activity_id
+        ? String(r.strava_activity_id)
+        : undefined,
+      activityName: String(r.activity_name ?? 'Loop Conquest'),
+      captureMode: (r.capture_mode as CaptureMode) || 'loop',
+      capturedAt: String(r.captured_at),
+      areaKm2: 0.1053,
+    };
+  });
 }
 
 /**
  * Computes the live Territory Dominance Leaderboard isolated to a specific Round.
+ * Credits every co-owner for shared cell counts.
  */
 export async function getLeaderboardStandings(roundId?: string | null): Promise<{
   round: RoundSummary;
@@ -1710,34 +2284,61 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
     .all<Record<string, unknown>>();
 
   const territoryRes = await db
-    .prepare('SELECT h3_index, owner_id FROM territories WHERE round_id = ?')
-    .bind(round.id)
-    .all<{ h3_index: string; owner_id: string }>();
-
-  const activityStatsRes = await db
     .prepare(
-      `SELECT
-        user_id,
-        COUNT(*) AS activities_count,
-        COALESCE(SUM(distance_meters), 0) AS total_distance_meters,
-        COALESCE(SUM(cells_stolen), 0) AS total_cells_stolen,
-        MAX(processed_at) AS last_active_at
-      FROM activities
-      WHERE round_id = ?
-      GROUP BY user_id`
+      'SELECT h3_index, owner_id, owner_ids FROM territories WHERE round_id = ?'
+    )
+    .bind(round.id)
+    .all<{ h3_index: string; owner_id: string; owner_ids?: string }>();
+
+  const territoryOwnersRes = await db
+    .prepare(
+      'SELECT h3_index, user_id FROM territory_owners WHERE round_id = ?'
+    )
+    .bind(round.id)
+    .all<{ h3_index: string; user_id: string }>();
+
+  const allActivitiesRes = await db
+    .prepare(
+      `SELECT user_id, copilot_user_ids, distance_meters, cells_stolen, processed_at
+       FROM activities
+       WHERE round_id = ?`
     )
     .bind(round.id)
     .all<Record<string, unknown>>();
 
-  const cellsByUser = new Map<string, string[]>();
+  const cellsSetByUser = new Map<string, Set<string>>();
   const allCells: string[] = [];
+  const validRoundCellsSet = new Set<string>();
+
   for (const row of territoryRes.results ?? []) {
-    const uid = String(row.owner_id);
+    const primaryUid = String(row.owner_id);
     const cell = String(row.h3_index);
     allCells.push(cell);
-    const list = cellsByUser.get(uid) ?? [];
-    list.push(cell);
-    cellsByUser.set(uid, list);
+    validRoundCellsSet.add(cell);
+
+    const parsedOwnerIds = parseJsonStringArray(row.owner_ids);
+    const ownersForCell =
+      parsedOwnerIds.length > 0 ? parsedOwnerIds : [primaryUid];
+    for (const uid of ownersForCell) {
+      let set = cellsSetByUser.get(uid);
+      if (!set) {
+        set = new Set<string>();
+        cellsSetByUser.set(uid, set);
+      }
+      set.add(cell);
+    }
+  }
+
+  for (const row of territoryOwnersRes.results ?? []) {
+    const cell = String(row.h3_index);
+    if (!validRoundCellsSet.has(cell)) continue;
+    const uid = String(row.user_id);
+    let set = cellsSetByUser.get(uid);
+    if (!set) {
+      set = new Set<string>();
+      cellsSetByUser.set(uid, set);
+    }
+    set.add(cell);
   }
 
   const totalGridCells = allCells.length;
@@ -1753,13 +2354,40 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
     }
   >();
 
-  for (const row of activityStatsRes.results ?? []) {
-    statsByUser.set(String(row.user_id), {
-      activitiesCount: Number(row.activities_count ?? 0),
-      totalDistanceMeters: Number(row.total_distance_meters ?? 0),
-      totalCellsStolen: Number(row.total_cells_stolen ?? 0),
-      lastActiveAt: row.last_active_at ? String(row.last_active_at) : null,
-    });
+  const creditUserActivityStat = (
+    uid: string,
+    dist: number,
+    stolen: number,
+    procAt: string | null
+  ) => {
+    const prev = statsByUser.get(uid) ?? {
+      activitiesCount: 0,
+      totalDistanceMeters: 0,
+      totalCellsStolen: 0,
+      lastActiveAt: null,
+    };
+    prev.activitiesCount += 1;
+    prev.totalDistanceMeters += dist;
+    prev.totalCellsStolen += stolen;
+    if (procAt && (!prev.lastActiveAt || procAt > prev.lastActiveAt)) {
+      prev.lastActiveAt = procAt;
+    }
+    statsByUser.set(uid, prev);
+  };
+
+  for (const row of allActivitiesRes.results ?? []) {
+    const primaryUid = String(row.user_id);
+    const copilots = parseJsonStringArray(row.copilot_user_ids).filter(
+      (id) => id !== primaryUid
+    );
+    const dist = Number(row.distance_meters ?? 0);
+    const stolen = Number(row.cells_stolen ?? 0);
+    const procAt = row.processed_at ? String(row.processed_at) : null;
+
+    creditUserActivityStat(primaryUid, dist, stolen, procAt);
+    for (const coUid of copilots) {
+      creditUserActivityStat(coUid, dist, stolen, procAt);
+    }
   }
 
   const participantSet = new Set(round.participantIds);
@@ -1770,14 +2398,14 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
       ? allUserRows.filter(
           (u) =>
             participantSet.has(String(u.id)) ||
-            cellsByUser.has(String(u.id)) ||
+            cellsSetByUser.has(String(u.id)) ||
             statsByUser.has(String(u.id))
         )
       : allUserRows;
 
   const entries: Omit<LeaderboardEntry, 'rank'>[] = relevantUsers.map((u) => {
     const userId = String(u.id);
-    const heldCells = cellsByUser.get(userId) ?? [];
+    const heldCells = Array.from(cellsSetByUser.get(userId) ?? []);
     const activeAreaKm2 = calculateH3CellsAreaKm2(heldCells);
     const actStats = statsByUser.get(userId);
     const stravaAthleteId =
@@ -1827,7 +2455,7 @@ export async function getLeaderboardStandings(roundId?: string | null): Promise<
 }
 
 /**
- * Fetches recent ingested activities for a specific Round with athlete display name and telemetry.
+ * Fetches recent ingested activities for a specific Round with athlete display name, co-owners, and telemetry.
  */
 export async function getRecentActivityFeed(
   roundId?: string | null,
@@ -1835,6 +2463,21 @@ export async function getRecentActivityFeed(
 ): Promise<ActivityFeedItem[]> {
   const db = await getD1Database();
   const targetRound = await getActiveOrSpecifiedRound(roundId);
+
+  const usersRes = await db
+    .prepare('SELECT id, username, display_name, color_hex FROM users')
+    .all<Record<string, unknown>>();
+  const userMap = new Map<string, TerritoryCoOwner>();
+  for (const u of usersRes.results ?? []) {
+    const uid = String(u.id);
+    const uname = String(u.username ?? 'player');
+    userMap.set(uid, {
+      userId: uid,
+      username: uname,
+      displayName: String(u.display_name || uname || 'Player'),
+      colorHex: String(u.color_hex ?? '#00f0ff'),
+    });
+  }
 
   const res = await db
     .prepare(
@@ -1854,35 +2497,67 @@ export async function getRecentActivityFeed(
     .bind(targetRound.id, limit)
     .all<Record<string, unknown>>();
 
-  return (res.results ?? []).map((r) => ({
-    id: String(r.id),
-    stravaActivityId: String(r.strava_activity_id ?? r.id),
-    roundId: String(r.round_id),
-    roundName: r.round_name ? String(r.round_name) : targetRound.name,
-    userId: String(r.user_id),
-    username: String(r.username ?? 'unknown'),
-    displayName: String(r.display_name || r.username || 'Player'),
-    userColor: String(r.color_hex ?? '#00f0ff'),
-    name: String(r.name),
-    sportType: String(r.sport_type ?? 'Run'),
-    distanceMeters: Number(r.distance_meters ?? 0),
-    movingTimeSeconds: Number(r.moving_time_seconds ?? 0),
-    captureMode: (r.capture_mode as CaptureMode) || 'loop',
-    cellsCaptured: Number(r.cells_captured ?? 0),
-    cellsStolen: Number(r.cells_stolen ?? 0),
-    areaKm2: Number(r.area_km2 ?? 0),
-    routeGeojson: String(r.route_geojson ?? '{"type":"LineString","coordinates":[]}'),
-    startLat:
-      r.start_lat !== null && r.start_lat !== undefined
-        ? Number(r.start_lat)
-        : null,
-    startLng:
-      r.start_lng !== null && r.start_lng !== undefined
-        ? Number(r.start_lng)
-        : null,
-    startedAt: String(r.started_at),
-    processedAt: String(r.processed_at),
-  }));
+  return (res.results ?? []).map((r) => {
+    const primaryUid = String(r.user_id);
+    const primaryUsername = String(r.username ?? 'unknown');
+    const primaryDisplayName = String(
+      r.display_name || r.username || 'Player'
+    );
+    const primaryColor = String(r.color_hex ?? '#00f0ff');
+    const copilotIds = parseJsonStringArray(r.copilot_user_ids).filter(
+      (id) => id !== primaryUid && userMap.has(id)
+    );
+    const allOwnerIds = [primaryUid, ...copilotIds];
+    const coOwners: TerritoryCoOwner[] = allOwnerIds.map((uid) => {
+      const found = userMap.get(uid);
+      if (found) return found;
+      return {
+        userId: uid,
+        username: primaryUsername,
+        displayName: primaryDisplayName,
+        colorHex: primaryColor,
+      };
+    });
+
+    return {
+      id: String(r.id),
+      stravaActivityId: String(r.strava_activity_id ?? r.id),
+      roundId: String(r.round_id),
+      roundName: r.round_name ? String(r.round_name) : targetRound.name,
+      userId: primaryUid,
+      username: primaryUsername,
+      displayName: primaryDisplayName,
+      userColor: primaryColor,
+      copilotUserIds: copilotIds,
+      coOwners,
+      isCoop: coOwners.length > 1,
+      sharedLabel:
+        coOwners.length > 1
+          ? formatSharedOwnershipLabel(coOwners.map((o) => o.displayName))
+          : undefined,
+      name: String(r.name),
+      sportType: String(r.sport_type ?? 'Run'),
+      distanceMeters: Number(r.distance_meters ?? 0),
+      movingTimeSeconds: Number(r.moving_time_seconds ?? 0),
+      captureMode: (r.capture_mode as CaptureMode) || 'loop',
+      cellsCaptured: Number(r.cells_captured ?? 0),
+      cellsStolen: Number(r.cells_stolen ?? 0),
+      areaKm2: Number(r.area_km2 ?? 0),
+      routeGeojson: String(
+        r.route_geojson ?? '{"type":"LineString","coordinates":[]}'
+      ),
+      startLat:
+        r.start_lat !== null && r.start_lat !== undefined
+          ? Number(r.start_lat)
+          : null,
+      startLng:
+        r.start_lng !== null && r.start_lng !== undefined
+          ? Number(r.start_lng)
+          : null,
+      startedAt: String(r.started_at),
+      processedAt: String(r.processed_at),
+    };
+  });
 }
 
 // ============================================================================
@@ -1896,6 +2571,21 @@ export async function getUserProfileWithHistory(
   const user = await getUserById(userId);
   if (!user) return null;
 
+  const usersRes = await db
+    .prepare('SELECT id, username, display_name, color_hex FROM users')
+    .all<Record<string, unknown>>();
+  const userMap = new Map<string, TerritoryCoOwner>();
+  for (const u of usersRes.results ?? []) {
+    const uid = String(u.id);
+    const uname = String(u.username ?? 'player');
+    userMap.set(uid, {
+      userId: uid,
+      username: uname,
+      displayName: String(u.display_name || uname || 'Player'),
+      colorHex: String(u.color_hex ?? '#00f0ff'),
+    });
+  }
+
   const activitiesRes = await db
     .prepare(
       `SELECT
@@ -1904,22 +2594,27 @@ export async function getUserProfileWithHistory(
         (
           SELECT COUNT(*)
           FROM territories t
-          WHERE t.activity_id = a.id AND t.owner_id = a.user_id
+          WHERE t.activity_id = a.id
         ) AS cells_still_held
       FROM activities a
       LEFT JOIN rounds r ON r.id = a.round_id
-      WHERE a.user_id = ?
+      WHERE a.user_id = ? OR a.copilot_user_ids LIKE ?
       ORDER BY a.started_at DESC, a.processed_at DESC`
     )
-    .bind(userId)
+    .bind(userId, `%"${userId}"%`)
     .all<Record<string, unknown>>();
 
   const activeRound = await getActiveOrSpecifiedRound();
   const activeHeldRes = await db
     .prepare(
-      'SELECT COUNT(*) AS cnt FROM territories WHERE round_id = ? AND owner_id = ?'
+      `SELECT COUNT(DISTINCT h3_index) AS cnt
+       FROM (
+         SELECT h3_index FROM territories WHERE round_id = ? AND (owner_id = ? OR owner_ids LIKE ?)
+         UNION
+         SELECT h3_index FROM territory_owners WHERE round_id = ? AND user_id = ?
+       )`
     )
-    .bind(activeRound.id, userId)
+    .bind(activeRound.id, userId, `%"${userId}"%`, activeRound.id, userId)
     .first<{ cnt: number }>();
 
   const rows = activitiesRes.results ?? [];
@@ -1943,6 +2638,21 @@ export async function getUserProfileWithHistory(
     const stolen = Number(r.cells_stolen ?? 0);
     const area = Number(r.area_km2 ?? 0);
 
+    const primaryUid = String(r.user_id ?? user.id);
+    const primaryOwner = userMap.get(primaryUid) ?? {
+      userId: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      colorHex: user.colorHex,
+    };
+    const copilotIds = parseJsonStringArray(r.copilot_user_ids).filter(
+      (id) => id !== primaryUid && userMap.has(id)
+    );
+    const allOwnerIds = [primaryUid, ...copilotIds];
+    const coOwners: TerritoryCoOwner[] = allOwnerIds.map(
+      (uid) => userMap.get(uid) ?? primaryOwner
+    );
+
     totalCellsCapturedEver += captured;
     totalCellsStolenEver += stolen;
     totalAreaClaimedKm2 += area;
@@ -1961,10 +2671,17 @@ export async function getUserProfileWithHistory(
       stravaActivityId: stravaId,
       roundId: String(r.round_id),
       roundName: r.round_name ? String(r.round_name) : 'Auckland Round',
-      userId: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      userColor: user.colorHex,
+      userId: primaryOwner.userId,
+      username: primaryOwner.username,
+      displayName: primaryOwner.displayName,
+      userColor: primaryOwner.colorHex,
+      copilotUserIds: copilotIds,
+      coOwners,
+      isCoop: coOwners.length > 1,
+      sharedLabel:
+        coOwners.length > 1
+          ? formatSharedOwnershipLabel(coOwners.map((o) => o.displayName))
+          : undefined,
       name: String(r.name),
       sportType: String(r.sport_type ?? 'Run'),
       distanceMeters: dist,

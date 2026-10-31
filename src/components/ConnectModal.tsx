@@ -400,6 +400,8 @@ export default function ConnectModal({
 
                           <a
                             href="/api/auth/strava"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border border-border-subtle bg-carbon-900 px-3.5 py-2 text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white"
                           >
                             <Zap className="h-3.5 w-3.5 text-strava-orange" />
@@ -409,6 +411,8 @@ export default function ConnectModal({
                       ) : (
                         <a
                           href="/api/auth/strava"
+                          target="_blank"
+                          rel="noopener noreferrer"
                           className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-strava-orange px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow transition hover:bg-strava-hover"
                         >
                           <Zap className="h-4 w-4 fill-current" />

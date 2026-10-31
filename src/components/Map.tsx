@@ -5,7 +5,7 @@ import Link from 'next/link';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { FeatureCollection, Polygon, LineString } from 'geojson';
-import type { TerritoryFeatureProperties } from '@/lib/geo';
+import type { TerritoryCoOwner, TerritoryFeatureProperties } from '@/lib/geo';
 import type { ActivityFeedItem } from '@/lib/d1';
 import {
   AUCKLAND_DEFAULT_CENTER,
@@ -27,8 +27,111 @@ import {
   Scan,
   Shield,
   Sparkles,
+  Users,
   X,
 } from 'lucide-react';
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = (hex || '#00f0ff').replace('#', '').trim();
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.padEnd(6, '0').slice(0, 6);
+  const num = parseInt(full, 16);
+  if (Number.isNaN(num)) return `rgba(0, 240, 255, ${alpha})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * Generates a tileable 64x64 45-degree alternating neon stripe pattern on an HTML5 canvas
+ * and registers it with MapLibre GL so multi-owner hexes render with diagonal co-op stripes.
+ */
+function ensureCoopStripePatternOnMap(
+  map: maplibregl.Map,
+  patternId: string,
+  colors: string[]
+): void {
+  if (!patternId || colors.length < 2 || typeof document === 'undefined') return;
+  if (map.hasImage(patternId)) return;
+
+  try {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const c1 = colors[0] || '#00f0ff';
+    const c2 = colors[1] || '#ff007f';
+    const c3 = colors[2] || null;
+
+    // Base fill with primary owner's translucent tint
+    ctx.fillStyle = hexToRgba(c1, 0.34);
+    ctx.fillRect(0, 0, size, size);
+
+    ctx.save();
+    ctx.lineCap = 'butt';
+
+    // Draw seamless 45° diagonal stripes across [-size, size*2]
+    const step = 16;
+    let stripeIdx = 0;
+    for (let offset = -size; offset <= size * 2; offset += step) {
+      const stripeColor =
+        c3 && stripeIdx % 2 === 1 ? c3 : c2;
+      ctx.strokeStyle = hexToRgba(stripeColor, 0.58);
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(offset, 0);
+      ctx.lineTo(offset + size, size);
+      ctx.stroke();
+      stripeIdx += 1;
+    }
+    ctx.restore();
+
+    const imageData = ctx.getImageData(0, 0, size, size);
+    map.addImage(
+      patternId,
+      {
+        width: size,
+        height: size,
+        data: new Uint8Array(imageData.data.buffer),
+      },
+      { pixelRatio: 2 }
+    );
+  } catch {
+    // Ignore canvas errors in headless environments
+  }
+}
+
+function parseOwnersFromCell(
+  cell: TerritoryFeatureProperties
+): TerritoryCoOwner[] {
+  if (cell.ownersJson) {
+    try {
+      const parsed = JSON.parse(cell.ownersJson);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+  return [
+    {
+      userId: cell.ownerId,
+      username: cell.ownerUsername,
+      displayName: cell.ownerDisplayName,
+      colorHex: cell.ownerColor,
+    },
+  ];
+}
 
 const CARTO_DARK_MATTER_STYLE =
   'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -192,6 +295,14 @@ export default function MapView({
   const [is3DPitch, setIs3DPitch] = useState(true);
   const [inspectedCell, setInspectedCell] =
     useState<TerritoryFeatureProperties | null>(null);
+  const [hoveredCell, setHoveredCell] = useState<{
+    x: number;
+    y: number;
+    label: string;
+    activityName: string;
+    isShared: boolean;
+    colors: string[];
+  } | null>(null);
   const lastFittedRoundRef = useRef<string | null>(null);
   const lastFittedHadFeaturesRef = useRef<boolean>(false);
 
@@ -259,6 +370,17 @@ export default function MapView({
       });
 
       map.addLayer({
+        id: 'territories-shared-pattern',
+        type: 'fill',
+        source: 'territories-source',
+        filter: ['==', ['get', 'isShared'], true],
+        paint: {
+          'fill-pattern': ['get', 'stripePatternId'],
+          'fill-opacity': 0.88,
+        },
+      });
+
+      map.addLayer({
         id: 'territories-border',
         type: 'line',
         source: 'territories-source',
@@ -276,6 +398,29 @@ export default function MapView({
             2.4,
           ],
           'line-opacity': 0.9,
+        },
+      });
+
+      map.addLayer({
+        id: 'territories-shared-border',
+        type: 'line',
+        source: 'territories-source',
+        filter: ['==', ['get', 'isShared'], true],
+        paint: {
+          'line-color': ['coalesce', ['get', 'secondaryColor'], '#ffffff'],
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10,
+            1.2,
+            14,
+            2.2,
+            17,
+            3.2,
+          ],
+          'line-dasharray': [2, 2],
+          'line-opacity': 0.95,
         },
       });
 
@@ -336,24 +481,48 @@ export default function MapView({
         map.getCanvas().style.cursor = 'pointer';
         const feature = e.features?.[0];
         if (feature && feature.properties) {
-          const h3Idx = String(feature.properties.h3Index || '');
+          const props = feature.properties as Record<string, unknown>;
+          const h3Idx = String(props.h3Index || '');
           map.setFilter('territories-highlight', [
             '==',
             ['get', 'h3Index'],
             h3Idx,
           ]);
+
+          const isShared =
+            props.isShared === true || props.isShared === 'true';
+          const label = String(
+            props.sharedLabel || props.ownerDisplayName || props.ownerUsername || 'Player'
+          );
+          const primaryColor = String(props.ownerColor || '#00f0ff');
+          const secondaryColor = String(
+            props.secondaryColor || primaryColor
+          );
+          setHoveredCell({
+            x: e.point.x,
+            y: e.point.y,
+            label,
+            activityName: String(props.activityName || 'Loop Conquest'),
+            isShared,
+            colors: isShared ? [primaryColor, secondaryColor] : [primaryColor],
+          });
         }
       });
 
       map.on('mouseleave', 'territories-fill', () => {
         map.getCanvas().style.cursor = '';
         map.setFilter('territories-highlight', ['==', ['get', 'h3Index'], '']);
+        setHoveredCell(null);
       });
 
       map.on('click', 'territories-fill', (e) => {
         const feature = e.features?.[0];
         if (!feature || !feature.properties) return;
-        const props = feature.properties as unknown as TerritoryFeatureProperties;
+        const props = feature.properties as Record<string, unknown>;
+        const rawActivityId = String(props.activityId || '');
+        const fallbackStravaId = rawActivityId.includes(':')
+          ? rawActivityId.split(':').slice(1).join(':')
+          : rawActivityId;
         setInspectedCell({
           h3Index: String(props.h3Index),
           roundId: String(props.roundId || 'round-1'),
@@ -363,7 +532,19 @@ export default function MapView({
             props.ownerDisplayName || props.ownerUsername
           ),
           ownerColor: String(props.ownerColor),
-          activityId: String(props.activityId),
+          ownersJson: props.ownersJson ? String(props.ownersJson) : undefined,
+          isShared: props.isShared === true || props.isShared === 'true',
+          ownerCount: Number(props.ownerCount ?? 1),
+          secondaryColor: props.secondaryColor
+            ? String(props.secondaryColor)
+            : undefined,
+          sharedLabel: props.sharedLabel
+            ? String(props.sharedLabel)
+            : undefined,
+          activityId: rawActivityId,
+          stravaActivityId: props.stravaActivityId
+            ? String(props.stravaActivityId)
+            : fallbackStravaId,
           activityName: String(props.activityName),
           captureMode: (props.captureMode as 'loop' | 'corridor') || 'loop',
           capturedAt: String(props.capturedAt),
@@ -423,6 +604,18 @@ export default function MapView({
     // Ignore stale data from a previously selected round while the new round is still loading
     if (roundId && territoriesRoundId && territoriesRoundId !== roundId) return;
 
+    // Register any dynamic co-op diagonal stripe patterns before updating source data
+    for (const feature of territoriesGeoJSON.features) {
+      const p = feature.properties;
+      if (p?.isShared && p.stripePatternId) {
+        const colors =
+          Array.isArray(p.ownerColors) && p.ownerColors.length >= 2
+            ? p.ownerColors
+            : [p.ownerColor, p.secondaryColor || '#ffffff'];
+        ensureCoopStripePatternOnMap(map, p.stripePatternId, colors);
+      }
+    }
+
     const source = map.getSource('territories-source') as
       | maplibregl.GeoJSONSource
       | undefined;
@@ -452,33 +645,65 @@ export default function MapView({
     fitMapToClaimedTerritories,
   ]);
 
-  // Apply Athlete Focus Filter styling on GPU layers
+  // Apply Athlete Focus Filter styling on GPU layers (highlights both solo and co-owned hexes)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     if (focusedOwnerId !== null) {
+      const matchExpr: maplibregl.ExpressionSpecification = [
+        'any',
+        ['==', ['get', 'ownerId'], focusedOwnerId],
+        [
+          'in',
+          `,${focusedOwnerId},`,
+          ['coalesce', ['get', 'ownerIdsCsv'], ''],
+        ],
+      ];
+
       map.setPaintProperty('territories-fill', 'fill-opacity', [
         'case',
-        ['==', ['get', 'ownerId'], focusedOwnerId],
+        matchExpr,
         0.42,
         0.05,
       ]);
+      if (map.getLayer('territories-shared-pattern')) {
+        map.setPaintProperty('territories-shared-pattern', 'fill-opacity', [
+          'case',
+          matchExpr,
+          0.95,
+          0.12,
+        ]);
+      }
       map.setPaintProperty('territories-border', 'line-opacity', [
         'case',
-        ['==', ['get', 'ownerId'], focusedOwnerId],
+        matchExpr,
         1.0,
         0.18,
       ]);
+      if (map.getLayer('territories-shared-border')) {
+        map.setPaintProperty('territories-shared-border', 'line-opacity', [
+          'case',
+          matchExpr,
+          1.0,
+          0.18,
+        ]);
+      }
       map.setPaintProperty('territories-glow', 'line-opacity', [
         'case',
-        ['==', ['get', 'ownerId'], focusedOwnerId],
+        matchExpr,
         0.65,
         0.04,
       ]);
     } else {
       map.setPaintProperty('territories-fill', 'fill-opacity', 0.25);
+      if (map.getLayer('territories-shared-pattern')) {
+        map.setPaintProperty('territories-shared-pattern', 'fill-opacity', 0.88);
+      }
       map.setPaintProperty('territories-border', 'line-opacity', 0.9);
+      if (map.getLayer('territories-shared-border')) {
+        map.setPaintProperty('territories-shared-border', 'line-opacity', 0.95);
+      }
       map.setPaintProperty('territories-glow', 'line-opacity', 0.38);
     }
   }, [focusedOwnerId, mapLoaded]);
@@ -844,85 +1069,167 @@ export default function MapView({
         </div>
       </div>
 
-      {/* H3 Hex Cell Telemetry Inspector Card */}
-      {inspectedCell && (
-        <div className="pointer-events-auto absolute left-3 top-32 z-30 w-80 max-w-[calc(100vw-4.5rem)] rounded-2xl border border-zinc-700/80 bg-carbon-900/95 p-4 shadow-glass backdrop-blur-2xl sm:left-6 sm:top-36">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <div
-                className="flex h-9 w-9 items-center justify-center rounded-xl border"
-                style={{
-                  borderColor: `${inspectedCell.ownerColor}66`,
-                  backgroundColor: `${inspectedCell.ownerColor}18`,
-                  boxShadow: `0 0 18px ${inspectedCell.ownerColor}33`,
-                }}
-              >
-                <Hexagon
-                  className="h-4 w-4"
-                  style={{ color: inspectedCell.ownerColor }}
+      {/* Hover Tooltip for Single & Co-op Shared Hexes */}
+      {hoveredCell && !inspectedCell && (
+        <div
+          className="pointer-events-none absolute z-20 hidden -translate-x-1/2 -translate-y-full rounded-xl border border-zinc-700/90 bg-carbon-900/95 px-3 py-2 shadow-glass backdrop-blur-xl sm:block"
+          style={{
+            left: hoveredCell.x,
+            top: Math.max(16, hoveredCell.y - 12),
+          }}
+        >
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center -space-x-1">
+              {hoveredCell.colors.map((col, idx) => (
+                <span
+                  key={idx}
+                  className="inline-block h-2.5 w-2.5 rounded-full border border-carbon-950"
+                  style={{ backgroundColor: col }}
                 />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
-                    H3 RES-9 CELL
-                  </span>
-                  <span
-                    className="inline-block h-2 w-2 rounded-full"
-                    style={{ backgroundColor: inspectedCell.ownerColor }}
-                  />
-                </div>
-                <p className="font-mono text-xs font-semibold text-zinc-100">
-                  {inspectedCell.h3Index}
-                </p>
-              </div>
+              ))}
             </div>
-
-            <button
-              type="button"
-              onClick={() => setInspectedCell(null)}
-              aria-label="Close Cell Inspector"
-              className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="mt-3.5 grid grid-cols-2 gap-2 rounded-xl border border-border-subtle bg-carbon-950/70 p-2.5">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-zinc-500">
-                TERRITORY HOLDER
-              </p>
-              <Link
-                href={`/profile/${inspectedCell.ownerId}`}
-                className="mt-0.5 flex items-center gap-1 truncate text-xs font-bold hover:underline"
-                style={{ color: inspectedCell.ownerColor }}
-              >
-                <span className="truncate">{inspectedCell.ownerDisplayName}</span>
-                <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-80" />
-              </Link>
-            </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-zinc-500">
-                CAPTURE PROTOCOL
-              </p>
-              <p className="mt-0.5 flex items-center gap-1 font-mono text-xs font-medium text-zinc-200">
-                <Layers className="h-3 w-3 text-zinc-400" />
-                LOOP ENCLOSURE
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-2.5 flex items-center justify-between text-xs text-zinc-400">
-            <span className="truncate pr-2 font-medium text-zinc-300">
-              {inspectedCell.activityName}
-            </span>
-            <span className="shrink-0 font-mono text-[11px] text-zinc-400">
-              {formatRelativeTime(inspectedCell.capturedAt)}
+            <span className="font-mono text-xs font-bold text-white">
+              {hoveredCell.label}
             </span>
           </div>
+          <p className="mt-0.5 max-w-[220px] truncate font-mono text-[10px] text-zinc-400">
+            {hoveredCell.activityName}
+          </p>
         </div>
       )}
+
+      {/* H3 Hex Cell Telemetry Inspector Card */}
+      {inspectedCell && (() => {
+        const cellOwners = parseOwnersFromCell(inspectedCell);
+        const isCoopCell = cellOwners.length > 1 || Boolean(inspectedCell.isShared);
+        const stravaIdCandidate = inspectedCell.stravaActivityId || '';
+        const hasValidStravaLink = /^\d+$/.test(stravaIdCandidate);
+
+        return (
+          <div className="pointer-events-auto absolute left-3 top-32 z-30 w-80 max-w-[calc(100vw-4.5rem)] rounded-2xl border border-zinc-700/80 bg-carbon-900/95 p-4 shadow-glass backdrop-blur-2xl sm:left-6 sm:top-36">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border"
+                  style={{
+                    borderColor: `${inspectedCell.ownerColor}66`,
+                    background: isCoopCell && inspectedCell.secondaryColor
+                      ? `linear-gradient(135deg, ${inspectedCell.ownerColor}33 0%, ${inspectedCell.secondaryColor}33 100%)`
+                      : `${inspectedCell.ownerColor}18`,
+                    boxShadow: `0 0 18px ${inspectedCell.ownerColor}33`,
+                  }}
+                >
+                  {isCoopCell ? (
+                    <Users
+                      className="h-4 w-4"
+                      style={{ color: inspectedCell.ownerColor }}
+                    />
+                  ) : (
+                    <Hexagon
+                      className="h-4 w-4"
+                      style={{ color: inspectedCell.ownerColor }}
+                    />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
+                      {isCoopCell ? 'CO-OP SHARED HEX' : 'H3 RES-9 CELL'}
+                    </span>
+                    <div className="flex items-center -space-x-1">
+                      {cellOwners.map((owner) => (
+                        <span
+                          key={owner.userId}
+                          className="inline-block h-2.5 w-2.5 rounded-full border border-carbon-950"
+                          style={{ backgroundColor: owner.colorHex }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <p className="font-mono text-xs font-semibold text-zinc-100">
+                    {inspectedCell.h3Index}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setInspectedCell(null)}
+                aria-label="Close Cell Inspector"
+                className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-3.5 rounded-xl border border-border-subtle bg-carbon-950/70 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  {isCoopCell ? 'JOINT TERRITORY CO-OWNERS' : 'TERRITORY HOLDER'}
+                </p>
+                <span className="font-mono text-[10px] text-zinc-400">
+                  {inspectedCell.captureMode === 'corridor'
+                    ? '25M CORRIDOR'
+                    : 'LOOP ENCLOSURE'}
+                </span>
+              </div>
+
+              {isCoopCell && inspectedCell.sharedLabel && (
+                <p className="mt-1 font-mono text-xs font-bold text-white">
+                  {inspectedCell.sharedLabel}
+                </p>
+              )}
+
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {cellOwners.map((owner) => (
+                  <Link
+                    key={owner.userId}
+                    href={`/profile/${owner.userId}`}
+                    className="inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold transition hover:brightness-110"
+                    style={{
+                      borderColor: `${owner.colorHex}55`,
+                      backgroundColor: `${owner.colorHex}18`,
+                      color: owner.colorHex,
+                    }}
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: owner.colorHex }}
+                    />
+                    <span className="truncate">{owner.displayName}</span>
+                    <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-80" />
+                  </Link>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2.5 flex items-center justify-between gap-2 text-xs text-zinc-400">
+              <span className="truncate font-medium text-zinc-300">
+                {inspectedCell.activityName}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-zinc-400">
+                {formatRelativeTime(inspectedCell.capturedAt)}
+              </span>
+            </div>
+
+            {hasValidStravaLink && (
+              <div className="mt-2.5 border-t border-border-subtle/60 pt-2.5">
+                <a
+                  href={`https://www.strava.com/activities/${encodeURIComponent(
+                    stravaIdCandidate
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-strava-orange/40 bg-strava-orange/15 px-3 py-2 font-mono text-[11px] font-bold text-strava-orange transition hover:bg-strava-orange/25"
+                >
+                  <span>View on Strava</span>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

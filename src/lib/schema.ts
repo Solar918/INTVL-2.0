@@ -107,6 +107,7 @@ export const activities = sqliteTable(
     areaKm2: real('area_km2').notNull().default(0),
     routeGeojson: text('route_geojson').notNull(),
     h3IndicesJson: text('h3_indices_json').notNull().default('[]'),
+    copilotUserIds: text('copilot_user_ids').default('[]'),
     startLat: real('start_lat'),
     startLng: real('start_lng'),
     startedAt: text('started_at')
@@ -134,6 +135,8 @@ export const territories = sqliteTable(
     ownerId: text('owner_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    ownerIds: text('owner_ids').notNull().default('[]'),
+    ownerColors: text('owner_colors').notNull().default('[]'),
     activityId: text('activity_id')
       .notNull()
       .references(() => activities.id, { onDelete: 'cascade' }),
@@ -153,6 +156,30 @@ export const territories = sqliteTable(
   })
 );
 
+export const territoryOwners = sqliteTable(
+  'territory_owners',
+  {
+    roundId: text('round_id')
+      .notNull()
+      .references(() => rounds.id, { onDelete: 'cascade' }),
+    h3Index: text('h3_index').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.roundId, table.h3Index, table.userId] }),
+    roundUserIdx: index('idx_territory_owners_round_user').on(
+      table.roundId,
+      table.userId
+    ),
+    cellIdx: index('idx_territory_owners_cell').on(
+      table.roundId,
+      table.h3Index
+    ),
+  })
+);
+
 export type UserRecord = typeof users.$inferSelect;
 export type NewUserRecord = typeof users.$inferInsert;
 export type RoundRecord = typeof rounds.$inferSelect;
@@ -161,3 +188,5 @@ export type ActivityRecord = typeof activities.$inferSelect;
 export type NewActivityRecord = typeof activities.$inferInsert;
 export type TerritoryRecord = typeof territories.$inferSelect;
 export type NewTerritoryRecord = typeof territories.$inferInsert;
+export type TerritoryOwnerRecord = typeof territoryOwners.$inferSelect;
+export type NewTerritoryOwnerRecord = typeof territoryOwners.$inferInsert;

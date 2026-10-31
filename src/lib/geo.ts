@@ -53,6 +53,13 @@ export interface ProcessedTerritoryResult {
   bbox: [number, number, number, number];
 }
 
+export interface TerritoryCoOwner {
+  userId: string;
+  username: string;
+  displayName: string;
+  colorHex: string;
+}
+
 export interface TerritoryFeatureProperties {
   h3Index: string;
   roundId: string;
@@ -60,7 +67,18 @@ export interface TerritoryFeatureProperties {
   ownerUsername: string;
   ownerDisplayName: string;
   ownerColor: string;
+  ownerIds?: string[];
+  ownerIdsCsv?: string;
+  ownerDisplayNames?: string[];
+  ownerColors?: string[];
+  ownersJson?: string;
+  isShared?: boolean;
+  ownerCount?: number;
+  secondaryColor?: string;
+  sharedLabel?: string;
+  stripePatternId?: string;
   activityId: string;
+  stravaActivityId?: string;
   activityName: string;
   captureMode: CaptureMode;
   capturedAt: string;

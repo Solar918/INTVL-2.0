@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS activities (
   strava_activity_id TEXT NOT NULL,
   round_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  copilot_user_ids TEXT DEFAULT '[]', -- JSON array of tagged co-walker user IDs
   name TEXT NOT NULL,
   sport_type TEXT NOT NULL DEFAULT 'Run',
   distance_meters REAL NOT NULL DEFAULT 0,
@@ -87,11 +88,13 @@ CREATE INDEX IF NOT EXISTS idx_activities_round_id ON activities(round_id);
 CREATE INDEX IF NOT EXISTS idx_activities_strava_id ON activities(strava_activity_id);
 CREATE INDEX IF NOT EXISTS idx_activities_started_at ON activities(started_at DESC);
 
--- 5. Round-Isolated H3 Resolution 9 Territories Table
+-- 5. Round-Isolated H3 Resolution 9 Territories Table (supports single & co-op joint ownership)
 CREATE TABLE IF NOT EXISTS territories (
   round_id TEXT NOT NULL,
   h3_index TEXT NOT NULL,
   owner_id TEXT NOT NULL,
+  owner_ids TEXT NOT NULL DEFAULT '[]', -- JSON array of co-owner user IDs (e.g. '["user_1","user_2"]')
+  owner_colors TEXT NOT NULL DEFAULT '[]', -- JSON array of co-owner hex colors (e.g. '["#00f0ff","#ff00ff"]')
   activity_id TEXT NOT NULL,
   captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (round_id, h3_index),
@@ -104,3 +107,16 @@ CREATE INDEX IF NOT EXISTS idx_territories_round_id ON territories(round_id);
 CREATE INDEX IF NOT EXISTS idx_territories_owner_id ON territories(round_id, owner_id);
 CREATE INDEX IF NOT EXISTS idx_territories_activity_id ON territories(activity_id);
 CREATE INDEX IF NOT EXISTS idx_territories_captured_at ON territories(captured_at DESC);
+
+-- 6. Many-to-Many Co-op Territory Owners Table
+CREATE TABLE IF NOT EXISTS territory_owners (
+  round_id TEXT NOT NULL,
+  h3_index TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  PRIMARY KEY (round_id, h3_index, user_id),
+  FOREIGN KEY (round_id, h3_index) REFERENCES territories(round_id, h3_index) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_territory_owners_round_user ON territory_owners(round_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_territory_owners_user_id ON territory_owners(user_id);

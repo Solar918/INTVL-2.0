@@ -17,7 +17,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     let records = await getAllTerritories(roundId);
     if (ownerFilter) {
-      records = records.filter((r) => r.ownerId === ownerFilter);
+      records = records.filter(
+        (r) => r.ownerId === ownerFilter || r.ownerIds?.includes(ownerFilter)
+      );
     }
 
     const featureCollection = territoriesToGeoJSON(records);

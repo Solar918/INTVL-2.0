@@ -164,6 +164,46 @@ export default function HomePage() {
     fetchArenaTelemetry();
   }, [fetchArenaTelemetry]);
 
+  // Automatically refresh session & telemetry when Strava OAuth completes in a new tab/popup
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'STRAVA_CONNECTED') {
+        fetchArenaTelemetry();
+      }
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'intvl_strava_connected_at') {
+        fetchArenaTelemetry();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    window.addEventListener('storage', onStorage);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('intvl_strava_auth');
+        bc.onmessage = (event) => {
+          if (event.data && event.data.type === 'STRAVA_CONNECTED') {
+            fetchArenaTelemetry();
+          }
+        };
+      }
+    } catch {
+      // Ignore if BroadcastChannel is unavailable
+    }
+
+    return () => {
+      window.removeEventListener('message', onMessage);
+      window.removeEventListener('storage', onStorage);
+      try {
+        bc?.close();
+      } catch {
+        // Ignore
+      }
+    };
+  }, [fetchArenaTelemetry]);
+
   const handleSelectRound = useCallback(
     async (nextRoundId: string) => {
       setSelectedRoundId(nextRoundId);
@@ -218,6 +258,14 @@ export default function HomePage() {
       : null;
   })();
   const currentUserId = currentAthlete?.userId ?? null;
+  const squadFriends = leaderboard
+    .filter((entry) => entry.userId !== currentUserId)
+    .map((entry) => ({
+      userId: entry.userId,
+      username: entry.username,
+      displayName: entry.displayName,
+      colorHex: entry.color,
+    }));
   const isRoundAdmin = Boolean(
     currentUserId &&
       currentRound &&
@@ -315,6 +363,8 @@ export default function HomePage() {
             ) : !currentAthlete?.stravaConnected ? (
               <a
                 href="/api/auth/strava"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-xl border border-strava-orange/70 bg-gradient-to-r from-strava-orange to-[#ff6723] px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow"
               >
                 <Zap className="h-4 w-4 fill-current" />
@@ -423,7 +473,9 @@ export default function HomePage() {
                   }}
                   currentUserId={currentUserId}
                   isRoundAdmin={isRoundAdmin}
+                  squadFriends={squadFriends}
                   onActivityDeleted={() => fetchArenaTelemetry(selectedRoundId)}
+                  onActivityUpdated={() => fetchArenaTelemetry(selectedRoundId)}
                 />
               </div>
             </motion.div>
@@ -619,7 +671,11 @@ export default function HomePage() {
                       onSelectActivity={(act) => setSelectedActivity(act)}
                       currentUserId={currentUserId}
                       isRoundAdmin={isRoundAdmin}
+                      squadFriends={squadFriends}
                       onActivityDeleted={() =>
+                        fetchArenaTelemetry(selectedRoundId)
+                      }
+                      onActivityUpdated={() =>
                         fetchArenaTelemetry(selectedRoundId)
                       }
                     />
@@ -638,6 +694,7 @@ export default function HomePage() {
         roundId={currentRound?.id ?? selectedRoundId}
         roundName={currentRound?.name ?? 'Round 1'}
         playerColor={activeColor}
+        squadFriends={squadFriends}
         onSyncComplete={handleSyncComplete}
       />
 

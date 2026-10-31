@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getActiveOrSpecifiedRound,
+  getAllRegisteredUsers,
   getImportedStravaActivityIdsForRound,
 } from '@/lib/d1';
 import {
@@ -178,8 +179,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ? Math.min(Math.max(1, daysParam), 90)
       : 30;
 
-    const targetRound = await getActiveOrSpecifiedRound(roundIdParam);
-    const accessToken = await refreshStravaAccessToken(user);
+    const [targetRound, allRegisteredUsers, accessToken] = await Promise.all([
+      getActiveOrSpecifiedRound(roundIdParam),
+      getAllRegisteredUsers(),
+      refreshStravaAccessToken(user),
+    ]);
+
+    const availableFriends = allRegisteredUsers
+      .filter((u) => u.id !== user.id)
+      .map((u) => ({
+        userId: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        colorHex: u.colorHex,
+      }));
 
     const recentActivities = await fetchAthleteActivitiesLastDays(
       accessToken,
@@ -216,6 +229,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ok: true,
       daysScanned: days,
       round: targetRound,
+      availableFriends,
       totalActivitiesFetched: recentActivities.length,
       eligibleSportCount: eligibleActivities.length,
       validLoopCount,

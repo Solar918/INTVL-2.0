@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import RoutePreviewSvg from '@/components/RoutePreviewSvg';
 import type { SyncResultPayload } from '@/components/SyncButton';
 import type { StravaSyncCandidate } from '@/app/api/sync/candidates/route';
-import type { CaptureMode } from '@/lib/geo';
+import type { CaptureMode, TerritoryCoOwner } from '@/lib/geo';
 import {
   formatAreaKm2,
   formatDistanceKm,
@@ -19,6 +19,7 @@ import {
   Check,
   CheckCircle2,
   Cpu,
+  ExternalLink,
   Filter,
   Hexagon,
   Layers,
@@ -28,6 +29,8 @@ import {
   Route,
   Sparkles,
   Timer,
+  UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 
@@ -37,6 +40,7 @@ export interface SyncReviewModalProps {
   roundId: string | null;
   roundName: string;
   playerColor: string;
+  squadFriends?: TerritoryCoOwner[];
   onSyncComplete: (result: SyncResultPayload) => void;
 }
 
@@ -48,11 +52,21 @@ export default function SyncReviewModal({
   roundId,
   roundName,
   playerColor,
+  squadFriends = [],
   onSyncComplete,
 }: SyncReviewModalProps) {
   const [isLoadingCandidates, setIsLoadingCandidates] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [candidates, setCandidates] = useState<StravaSyncCandidate[]>([]);
+  const [availableFriends, setAvailableFriends] =
+    useState<TerritoryCoOwner[]>(squadFriends);
+  const [globalCopilotIds, setGlobalCopilotIds] = useState<string[]>([]);
+  const [perActivityCopilots, setPerActivityCopilots] = useState<
+    Record<string, string[]>
+  >({});
+  const [openCopilotPickerFor, setOpenCopilotPickerFor] = useState<
+    string | null
+  >(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [overrideModes, setOverrideModes] = useState<
     Record<string, CaptureMode>
@@ -83,6 +97,7 @@ export default function SyncReviewModal({
         ok?: boolean;
         error?: string;
         candidates?: StravaSyncCandidate[];
+        availableFriends?: TerritoryCoOwner[];
         totalActivitiesFetched?: number;
         validLoopCount?: number;
         nonLoopCount?: number;
@@ -93,6 +108,9 @@ export default function SyncReviewModal({
 
       const list = (data.candidates ?? []) as StravaSyncCandidate[];
       setCandidates(list);
+      if (Array.isArray(data.availableFriends)) {
+        setAvailableFriends(data.availableFriends);
+      }
       setScanMeta({
         totalFetched: data.totalActivitiesFetched ?? list.length,
         validLoopCount:
@@ -114,6 +132,8 @@ export default function SyncReviewModal({
 
       setOverrideModes(initialModes);
       setSelectedIds(initialSelected);
+      setPerActivityCopilots({});
+      setOpenCopilotPickerFor(null);
     } catch (err) {
       setError(
         err instanceof Error
@@ -180,6 +200,42 @@ export default function SyncReviewModal({
     setSelectedIds(new Set());
   };
 
+  const toggleGlobalCopilot = (friendUserId: string) => {
+    setGlobalCopilotIds((prev) =>
+      prev.includes(friendUserId)
+        ? prev.filter((id) => id !== friendUserId)
+        : [...prev, friendUserId]
+    );
+  };
+
+  const getEffectiveCopilotsForActivity = (stravaActivityId: string): string[] => {
+    if (perActivityCopilots[stravaActivityId] !== undefined) {
+      return perActivityCopilots[stravaActivityId];
+    }
+    return globalCopilotIds;
+  };
+
+  const toggleActivityCopilot = (
+    stravaActivityId: string,
+    friendUserId: string,
+    e: React.MouseEvent
+  ) => {
+    e.stopPropagation();
+    const current = getEffectiveCopilotsForActivity(stravaActivityId);
+    const next = current.includes(friendUserId)
+      ? current.filter((id) => id !== friendUserId)
+      : [...current, friendUserId];
+    setPerActivityCopilots((prev) => ({
+      ...prev,
+      [stravaActivityId]: next,
+    }));
+    setSelectedIds((prev) => {
+      const nextSet = new Set(prev);
+      nextSet.add(stravaActivityId);
+      return nextSet;
+    });
+  };
+
   const handleImportSelected = async () => {
     if (selectedIds.size === 0 || isImporting) return;
     setIsImporting(true);
@@ -188,14 +244,20 @@ export default function SyncReviewModal({
     try {
       const activityOverrides: Record<
         string,
-        { forceLoop: boolean; captureMode: CaptureMode }
+        {
+          forceLoop: boolean;
+          captureMode: CaptureMode;
+          copilotUserIds: string[];
+        }
       > = {};
 
       for (const actId of selectedIds) {
         const mode = overrideModes[actId] ?? 'loop';
+        const copilots = getEffectiveCopilotsForActivity(actId);
         activityOverrides[actId] = {
           forceLoop: mode === 'loop',
           captureMode: mode,
+          copilotUserIds: copilots,
         };
       }
 
@@ -210,6 +272,7 @@ export default function SyncReviewModal({
           roundId: roundId ?? undefined,
           forceLoop: firstMode === 'loop',
           captureMode: firstMode,
+          copilotUserIds: globalCopilotIds,
           activityOverrides,
         }),
       });
@@ -411,6 +474,63 @@ export default function SyncReviewModal({
               )}
             </div>
 
+            {/* Co-op Capture Bar: "Walked with Friends" Multi-Select */}
+            {availableFriends.length > 0 && (
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-border-subtle/70 bg-carbon-950/90 px-5 py-2.5 sm:px-6">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-neon-magenta/40 bg-neon-magenta/10 text-neon-magenta">
+                    <Users className="h-3.5 w-3.5" />
+                  </span>
+                  <div>
+                    <p className="font-mono text-[11px] font-bold uppercase tracking-wider text-white">
+                      Walked with Friends (Co-op Capture)
+                    </p>
+                    <p className="font-mono text-[10px] text-zinc-400">
+                      Tag squadmates who walked with you to share H3 hex ownership &amp; leaderboard credit:
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {availableFriends.map((friend) => {
+                    const isTagged = globalCopilotIds.includes(friend.userId);
+                    return (
+                      <button
+                        key={friend.userId}
+                        type="button"
+                        onClick={() => toggleGlobalCopilot(friend.userId)}
+                        className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 py-1 font-mono text-xs font-semibold transition ${
+                          isTagged
+                            ? 'border-white/70 bg-zinc-800 text-white shadow'
+                            : 'border-border-subtle bg-carbon-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                        }`}
+                        style={
+                          isTagged
+                            ? {
+                                borderColor: friend.colorHex,
+                                boxShadow: `0 0 12px ${friend.colorHex}33`,
+                              }
+                            : undefined
+                        }
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: friend.colorHex }}
+                        />
+                        <span>{friend.displayName}</span>
+                        {isTagged && (
+                          <Check
+                            className="h-3 w-3"
+                            style={{ color: friend.colorHex }}
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Body: Candidate List */}
             <div className="touch-scroll flex-1 overflow-y-auto p-4 sm:p-6">
               {error && (
@@ -570,7 +690,127 @@ export default function SyncReviewModal({
                                 <span className="text-zinc-500">
                                   • {formatRelativeTime(item.startedAt)}
                                 </span>
+                                {/^\d+$/.test(item.stravaActivityId) && (
+                                  <a
+                                    href={`https://www.strava.com/activities/${encodeURIComponent(
+                                      item.stravaActivityId
+                                    )}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="inline-flex items-center gap-1 text-strava-orange hover:underline"
+                                  >
+                                    <span>View on Strava</span>
+                                    <ExternalLink className="h-2.5 w-2.5" />
+                                  </a>
+                                )}
                               </div>
+
+                              {/* Per-Activity Co-op Friends Tagging Row */}
+                              {hasGps && availableFriends.length > 0 && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="mt-2 flex flex-wrap items-center gap-1.5"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenCopilotPickerFor((prev) =>
+                                        prev === item.stravaActivityId
+                                          ? null
+                                          : item.stravaActivityId
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-border-subtle bg-carbon-900/90 px-2 py-0.5 font-mono text-[10px] font-semibold text-zinc-300 transition hover:border-neon-magenta/50 hover:text-white"
+                                  >
+                                    <UserPlus className="h-3 w-3 text-neon-magenta" />
+                                    <span>
+                                      {getEffectiveCopilotsForActivity(
+                                        item.stravaActivityId
+                                      ).length > 0
+                                        ? `Co-op (${
+                                            getEffectiveCopilotsForActivity(
+                                              item.stravaActivityId
+                                            ).length
+                                          } tagged)`
+                                        : 'Walked with Friends'}
+                                    </span>
+                                  </button>
+
+                                  {getEffectiveCopilotsForActivity(
+                                    item.stravaActivityId
+                                  ).map((coId) => {
+                                    const f = availableFriends.find(
+                                      (fr) => fr.userId === coId
+                                    );
+                                    if (!f) return null;
+                                    return (
+                                      <span
+                                        key={coId}
+                                        className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-bold"
+                                        style={{
+                                          borderColor: `${f.colorHex}66`,
+                                          backgroundColor: `${f.colorHex}18`,
+                                          color: f.colorHex,
+                                        }}
+                                      >
+                                        <span
+                                          className="h-1.5 w-1.5 rounded-full"
+                                          style={{
+                                            backgroundColor: f.colorHex,
+                                          }}
+                                        />
+                                        <span>+{f.displayName}</span>
+                                      </span>
+                                    );
+                                  })}
+
+                                  {openCopilotPickerFor ===
+                                    item.stravaActivityId && (
+                                    <div className="mt-1 flex w-full flex-wrap items-center gap-1.5 rounded-xl border border-border-subtle bg-carbon-900/95 p-2">
+                                      <span className="font-mono text-[10px] text-zinc-400">
+                                        Co-Walkers:
+                                      </span>
+                                      {availableFriends.map((friend) => {
+                                        const active =
+                                          getEffectiveCopilotsForActivity(
+                                            item.stravaActivityId
+                                          ).includes(friend.userId);
+                                        return (
+                                          <button
+                                            key={friend.userId}
+                                            type="button"
+                                            onClick={(e) =>
+                                              toggleActivityCopilot(
+                                                item.stravaActivityId,
+                                                friend.userId,
+                                                e
+                                              )
+                                            }
+                                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] font-semibold transition ${
+                                              active
+                                                ? 'border-white bg-zinc-800 text-white'
+                                                : 'border-border-subtle bg-carbon-950 text-zinc-400 hover:text-white'
+                                            }`}
+                                          >
+                                            <span
+                                              className="h-2 w-2 rounded-full"
+                                              style={{
+                                                backgroundColor:
+                                                  friend.colorHex,
+                                              }}
+                                            />
+                                            <span>{friend.displayName}</span>
+                                            {active && (
+                                              <Check className="h-2.5 w-2.5 text-neon-lime" />
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
 

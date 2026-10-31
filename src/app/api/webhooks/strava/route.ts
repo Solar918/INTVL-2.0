@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getActiveOrSpecifiedRound,
+  getActiveRoundForUser,
   getUserByStravaAthleteId,
   ingestActivityStream,
   isRoundLockedForIngestion,
@@ -12,7 +13,7 @@ import {
   isEligibleConquestSport,
   refreshStravaAccessToken,
 } from '@/lib/strava';
-import { processActivityCoordinates } from '@/lib/geo';
+import { decodePolyline } from '@/lib/geo';
 
 export const runtime = 'edge';
 
@@ -130,7 +131,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const activeRound = await getActiveOrSpecifiedRound();
+    const activeRound =
+      (await getActiveRoundForUser(user.id)) ??
+      (await getActiveOrSpecifiedRound());
     if (isRoundLockedForIngestion(activeRound)) {
       return NextResponse.json(
         {
@@ -144,10 +147,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const validAccessToken = await refreshStravaAccessToken(user);
 
-    const [activityDetail, latLngStream] = await Promise.all([
+    const [activityDetail, rawLatLngStream] = await Promise.all([
       fetchStravaActivityDetail(activityId, validAccessToken),
       fetchStravaActivityLatLngStream(activityId, validAccessToken),
     ]);
+
+    let latLngStream = rawLatLngStream;
+    if ((!latLngStream || latLngStream.length < 2) && activityDetail?.map) {
+      const encodedPoly =
+        activityDetail.map.polyline || activityDetail.map.summary_polyline || '';
+      if (encodedPoly) {
+        latLngStream = decodePolyline(encodedPoly);
+      }
+    }
 
     const rawSportType =
       activityDetail?.sport_type ||
@@ -193,6 +205,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         ? new Date(payload.event_time * 1000).toISOString()
         : new Date().toISOString());
 
+    const copilotUserIds = Array.isArray(payload.updates?.copilot_user_ids)
+      ? payload.updates.copilot_user_ids.map((id) => String(id))
+      : undefined;
+
     if (!latLngStream || latLngStream.length < 2) {
       return NextResponse.json(
         {
@@ -208,6 +224,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       stravaActivityId: activityId,
       roundId: activeRound.id,
       userId: user.id,
+      copilotUserIds,
       name: activityName,
       sportType,
       distanceMeters,

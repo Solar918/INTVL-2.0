@@ -547,6 +547,8 @@ export default function Leaderboard({
                   </div>
                   <a
                     href="/api/auth/strava"
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="inline-flex min-h-[48px] items-center gap-1.5 rounded-lg bg-strava-orange px-3.5 py-2 text-xs font-bold text-white shadow transition hover:bg-strava-hover"
                   >
                     <Zap className="h-3.5 w-3.5 fill-current" />

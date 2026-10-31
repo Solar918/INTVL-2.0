@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import type { ActivityFeedItem, DeleteActivityRollbackResult } from '@/lib/d1';
+import type { TerritoryCoOwner } from '@/lib/geo';
 import RoutePreviewSvg from '@/components/RoutePreviewSvg';
 import {
   formatAreaKm2,
@@ -13,6 +14,8 @@ import {
 } from '@/lib/utils';
 import {
   AlertTriangle,
+  Check,
+  ExternalLink,
   Flame,
   Hexagon,
   Loader2,
@@ -20,6 +23,8 @@ import {
   Navigation,
   Timer,
   Trash2,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 
 export interface ActivityFeedProps {
@@ -28,7 +33,9 @@ export interface ActivityFeedProps {
   onSelectActivity: (activity: ActivityFeedItem | null) => void;
   currentUserId?: string | null;
   isRoundAdmin?: boolean;
+  squadFriends?: TerritoryCoOwner[];
   onActivityDeleted?: (rollback: DeleteActivityRollbackResult) => void;
+  onActivityUpdated?: () => void;
 }
 
 export default function ActivityFeed({
@@ -37,11 +44,80 @@ export default function ActivityFeed({
   onSelectActivity,
   currentUserId,
   isRoundAdmin = false,
+  squadFriends = [],
   onActivityDeleted,
+  onActivityUpdated,
 }: ActivityFeedProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [editingCopilotsForId, setEditingCopilotsForId] = useState<
+    string | null
+  >(null);
+  const [draftCopilotIds, setDraftCopilotIds] = useState<string[]>([]);
+  const [savingCopilotsId, setSavingCopilotsId] = useState<string | null>(null);
+
+  const handleOpenCopilotEditor = (
+    e: React.MouseEvent,
+    activity: ActivityFeedItem
+  ) => {
+    e.stopPropagation();
+    if (editingCopilotsForId === activity.id) {
+      setEditingCopilotsForId(null);
+      return;
+    }
+    setEditingCopilotsForId(activity.id);
+    setDraftCopilotIds(activity.copilotUserIds ?? []);
+  };
+
+  const handleToggleDraftCopilot = (friendUserId: string) => {
+    setDraftCopilotIds((prev) =>
+      prev.includes(friendUserId)
+        ? prev.filter((id) => id !== friendUserId)
+        : [...prev, friendUserId]
+    );
+  };
+
+  const handleSaveCopilots = async (
+    e: React.MouseEvent,
+    activity: ActivityFeedItem
+  ) => {
+    e.stopPropagation();
+    setSavingCopilotsId(activity.id);
+    setDeleteError(null);
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activity.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            copilotUserIds: draftCopilotIds,
+          }),
+        }
+      );
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to update co-walkers.');
+      }
+      setEditingCopilotsForId(null);
+      onActivityUpdated?.();
+      onActivityDeleted?.({
+        deletedActivityId: activity.id,
+        deletedActivityName: activity.name,
+        roundId: activity.roundId,
+        cellsAffected: 0,
+        cellsReverted: 0,
+        cellsCleared: 0,
+      });
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : 'Failed to update co-walkers.'
+      );
+    } finally {
+      setSavingCopilotsId(null);
+    }
+  };
 
   const handleConfirmDelete = async (
     e: React.MouseEvent,
@@ -141,23 +217,56 @@ export default function ActivityFeed({
 
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Link
-                      href={`/profile/${activity.userId}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-xs font-bold hover:underline"
-                      style={{ color: activity.userColor }}
-                    >
-                      {activity.displayName}
-                    </Link>
+                    {activity.coOwners && activity.coOwners.length > 1 ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {activity.coOwners.map((owner, idx) => (
+                          <React.Fragment key={owner.userId}>
+                            <Link
+                              href={`/profile/${owner.userId}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-xs font-bold hover:underline"
+                              style={{ color: owner.colorHex }}
+                            >
+                              {owner.displayName}
+                            </Link>
+                            {idx < activity.coOwners.length - 1 && (
+                              <span className="font-mono text-[10px] text-zinc-400">
+                                &amp;
+                              </span>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    ) : (
+                      <Link
+                        href={`/profile/${activity.userId}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs font-bold hover:underline"
+                        style={{ color: activity.userColor }}
+                      >
+                        {activity.displayName}
+                      </Link>
+                    )}
                     <span className="text-zinc-600">•</span>
                     <span className="inline-flex items-center gap-1 rounded border border-neon-cyan/30 bg-neon-cyan/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-neon-cyan">
                       {isLoop ? 'CLOSED LOOP' : 'CORRIDOR'}
                     </span>
+                    {activity.isCoop && (
+                      <span className="inline-flex items-center gap-1 rounded border border-neon-magenta/40 bg-neon-magenta/10 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-neon-magenta">
+                        <Users className="h-2.5 w-2.5" />
+                        CO-OP
+                      </span>
+                    )}
                   </div>
 
                   <p className="mt-0.5 break-words text-xs font-semibold text-zinc-100 sm:text-sm">
                     {activity.name}
                   </p>
+                  {activity.isCoop && activity.sharedLabel && (
+                    <p className="mt-0.5 font-mono text-[10px] text-zinc-400">
+                      {activity.sharedLabel}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -188,6 +297,24 @@ export default function ActivityFeed({
                   </span>
                 </div>
 
+                {canDelete &&
+                  squadFriends.filter((f) => f.userId !== activity.userId)
+                    .length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleOpenCopilotEditor(e, activity)}
+                      title="Walked with Friends (Co-op Tagging)"
+                      aria-label={`Tag friends on ${activity.name}`}
+                      className={`flex min-h-[48px] min-w-[48px] items-center justify-center rounded-xl border transition ${
+                        editingCopilotsForId === activity.id || activity.isCoop
+                          ? 'border-neon-magenta/60 bg-neon-magenta/15 text-neon-magenta'
+                          : 'border-border-subtle/80 bg-carbon-900/90 text-zinc-400 hover:border-neon-magenta/50 hover:text-white'
+                      }`}
+                    >
+                      <UserPlus className="h-4 w-4" />
+                    </button>
+                  )}
+
                 {canDelete && !isConfirming && (
                   <button
                     type="button"
@@ -204,6 +331,76 @@ export default function ActivityFeed({
                 )}
               </div>
             </div>
+
+            {/* Inline "Walked with Friends" Co-op Editor */}
+            {editingCopilotsForId === activity.id && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="mt-3 rounded-xl border border-neon-magenta/40 bg-carbon-900/95 p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-neon-magenta">
+                    <Users className="h-3.5 w-3.5" />
+                    <span>Walked with Friends (Joint Territory)</span>
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-zinc-400">
+                  Select squadmates who walked this route with you to share ownership of its H3 hexes:
+                </p>
+
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {squadFriends
+                    .filter((f) => f.userId !== activity.userId)
+                    .map((friend) => {
+                      const selected = draftCopilotIds.includes(friend.userId);
+                      return (
+                        <button
+                          key={friend.userId}
+                          type="button"
+                          onClick={() => handleToggleDraftCopilot(friend.userId)}
+                          className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-2.5 py-1.5 font-mono text-xs font-semibold transition ${
+                            selected
+                              ? 'border-white bg-zinc-800 text-white'
+                              : 'border-border-subtle bg-carbon-950 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: friend.colorHex }}
+                          />
+                          <span>{friend.displayName}</span>
+                          {selected && (
+                            <Check className="h-3 w-3 text-neon-lime" />
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+
+                <div className="mt-2.5 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingCopilotsForId(null)}
+                    className="rounded-lg border border-border-subtle bg-carbon-950 px-3 py-1.5 font-mono text-[11px] text-zinc-300 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingCopilotsId === activity.id}
+                    onClick={(e) => handleSaveCopilots(e, activity)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-neon-magenta px-3 py-1.5 font-mono text-[11px] font-bold text-white transition hover:brightness-110 disabled:opacity-50"
+                  >
+                    {savingCopilotsId === activity.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Check className="h-3 w-3" />
+                    )}
+                    <span>Save Co-Walkers</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Confirmation Dialog for Activity Removal & Hex Reversion */}
             {isConfirming && (
@@ -280,10 +477,27 @@ export default function ActivityFeed({
                 </span>
               </div>
 
-              <span className="flex items-center gap-1 text-[10px] text-zinc-400 group-hover:text-white">
-                <MapPin className="h-3 w-3" />
-                {isSelected ? 'Viewing GPS Track' : 'Inspect Track'}
-              </span>
+              <div className="flex items-center gap-2.5">
+                {/^\d+$/.test(activity.stravaActivityId) && (
+                  <a
+                    href={`https://www.strava.com/activities/${encodeURIComponent(
+                      activity.stravaActivityId
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-strava-orange transition hover:underline"
+                  >
+                    <span>View on Strava</span>
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                )}
+
+                <span className="flex items-center gap-1 text-[10px] text-zinc-400 group-hover:text-white">
+                  <MapPin className="h-3 w-3" />
+                  {isSelected ? 'Viewing GPS Track' : 'Inspect Track'}
+                </span>
+              </div>
             </div>
           </div>
         );

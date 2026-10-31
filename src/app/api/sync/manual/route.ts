@@ -26,6 +26,7 @@ export const runtime = 'edge';
 export interface ActivityImportOverride {
   forceLoop?: boolean;
   captureMode?: CaptureMode;
+  copilotUserIds?: string[];
 }
 
 export interface ManualSyncRequestBody {
@@ -33,6 +34,7 @@ export interface ManualSyncRequestBody {
   roundId?: string;
   forceLoop?: boolean;
   captureMode?: CaptureMode;
+  copilotUserIds?: string[];
   activityOverrides?: Record<string, ActivityImportOverride>;
 }
 
@@ -167,11 +169,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           itemOverride?.captureMode ??
           body.captureMode ??
           (forceLoop ? 'loop' : undefined);
+        const copilotUserIds: string[] | undefined =
+          itemOverride?.copilotUserIds !== undefined
+            ? itemOverride.copilotUserIds
+            : body.copilotUserIds;
 
         const ingested = await ingestActivityStream({
           stravaActivityId: actId,
           roundId: targetRound.id,
           userId: user.id,
+          copilotUserIds,
           name:
             actSummary?.name ||
             `Strava ${actSummary?.sport_type || 'Walk'}`,

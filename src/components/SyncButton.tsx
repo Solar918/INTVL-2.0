@@ -73,6 +73,8 @@ export default function SyncButton({
     return (
       <a
         href="/api/auth/strava"
+        target="_blank"
+        rel="noopener noreferrer"
         className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl border border-strava-orange/70 bg-gradient-to-r from-strava-orange to-[#ff6723] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-lg transition hover:brightness-110 sm:text-sm"
       >
         <Zap className="h-4 w-4 fill-current" />
