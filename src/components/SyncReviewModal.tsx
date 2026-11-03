@@ -337,11 +337,11 @@ export default function SyncReviewModal({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 40 }}
             transition={{ duration: 0.2 }}
-            className="relative z-10 flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-border-subtle bg-carbon-900 shadow-glass sm:rounded-3xl"
+            className="relative z-10 flex max-h-[94dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-border-subtle bg-carbon-900 shadow-glass sm:max-h-[88dvh] sm:rounded-3xl"
           >
             {/* Top Signature Accent Bar */}
             <div
-              className="h-1.5 w-full shrink-0"
+              className="h-1 w-full shrink-0 sm:h-1.5"
               style={{
                 backgroundColor: playerColor,
                 boxShadow: `0 0 20px ${playerColor}`,
@@ -349,38 +349,39 @@ export default function SyncReviewModal({
             />
 
             {/* Mobile Drag Handle */}
-            <div className="flex shrink-0 justify-center pt-2 sm:hidden">
-              <div className="h-1.5 w-12 rounded-full bg-zinc-700" />
+            <div className="flex shrink-0 justify-center pt-1.5 sm:hidden">
+              <div className="h-1 w-10 rounded-full bg-zinc-700" />
             </div>
 
             {/* Header */}
-            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-subtle px-5 py-3.5 sm:px-6 sm:py-4">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-strava-orange/40 bg-strava-orange/15 px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-strava-orange">
-                    <Calendar className="h-3 w-3" />
-                    PAST 30 DAYS STRAVA SCANNER
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle px-4 py-2 sm:items-start sm:gap-4 sm:px-6 sm:py-3.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-strava-orange/40 bg-strava-orange/15 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-strava-orange sm:text-[10px]">
+                    <Calendar className="h-2.5 w-2.5 sm:h-3 sm:w-3" />
+                    <span className=" sm:hidden">30D STRAVA SCAN</span>
+                    <span className="hidden sm:inline">PAST 30 DAYS STRAVA SCANNER</span>
                   </span>
-                  <span className="rounded border border-zinc-700 bg-carbon-950 px-2 py-0.5 font-mono text-[10px] text-zinc-300">
+                  <span className="rounded border border-zinc-700 bg-carbon-950 px-1.5 py-0.5 font-mono text-[9px] text-zinc-300 sm:px-2 sm:text-[10px]">
                     TARGET: {roundName.toUpperCase()}
                   </span>
                 </div>
-                <h2 className="mt-1.5 font-display text-lg font-bold text-white sm:text-xl">
-                  Review & Claim Strava Walks & Runs
+                <h2 className="mt-1 truncate font-display text-sm font-bold text-white sm:text-xl">
+                  Review &amp; Claim Strava Walks &amp; Runs
                 </h2>
-                <p className="mt-0.5 text-xs text-zinc-400">
+                <p className="mt-0.5 hidden text-xs text-zinc-400 sm:block">
                   Auto-detects closed loops (150m endpoint / 100m internal tolerance). Flagged walks can be manually forced as a loop or claimed as a 25m street corridor.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 <button
                   type="button"
                   onClick={loadCandidates}
                   disabled={isLoadingCandidates}
                   title="Rescan Strava"
                   aria-label="Rescan Strava"
-                  className="flex h-12 w-12 min-h-[48px] min-w-[48px] items-center justify-center rounded-xl border border-border-subtle bg-carbon-950/70 text-zinc-300 transition hover:border-zinc-700 hover:text-white disabled:opacity-50"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-border-subtle bg-carbon-950/70 text-zinc-300 transition hover:border-zinc-700 hover:text-white disabled:opacity-50 sm:h-11 sm:w-11"
                 >
                   <RefreshCw
                     className={`h-4 w-4 ${isLoadingCandidates ? 'animate-spin' : ''}`}
@@ -390,7 +391,7 @@ export default function SyncReviewModal({
                   type="button"
                   onClick={onClose}
                   aria-label="Close Sync Review Modal"
-                  className="flex h-12 w-12 min-h-[48px] min-w-[48px] items-center justify-center rounded-xl border border-border-subtle bg-carbon-950/70 text-zinc-400 transition hover:border-zinc-700 hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-border-subtle bg-carbon-950/70 text-zinc-400 transition hover:border-zinc-700 hover:text-white sm:h-11 sm:w-11"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -398,70 +399,73 @@ export default function SyncReviewModal({
             </div>
 
             {/* Filter & Summary Bar */}
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border-subtle/70 bg-carbon-950/60 px-5 py-3 sm:px-6">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex shrink-0 flex-col gap-1.5 border-b border-border-subtle/70 bg-carbon-950/60 px-3.5 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-2.5 sm:px-6 sm:py-2.5">
+              <div className="flex items-center gap-1.5 overflow-x-auto">
                 <button
                   type="button"
                   onClick={() => setFilterTab('all')}
-                  className={`flex min-h-[48px] items-center gap-1.5 rounded-xl border px-3.5 py-2 font-mono text-xs font-semibold transition ${
+                  className={`flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-semibold transition sm:rounded-xl sm:px-3 sm:py-2 sm:text-xs ${
                     filterTab === 'all'
                       ? 'border-neon-cyan/50 bg-neon-cyan/15 text-neon-cyan'
                       : 'border-border-subtle bg-carbon-900 text-zinc-400 hover:text-white'
                   }`}
                 >
-                  <Filter className="h-3.5 w-3.5" />
-                  <span>All Scanned ({candidates.length})</span>
+                  <Filter className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                  <span className="sm:hidden">All ({candidates.length})</span>
+                  <span className="hidden sm:inline">All Scanned ({candidates.length})</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setFilterTab('loops')}
-                  className={`flex min-h-[48px] items-center gap-1.5 rounded-xl border px-3.5 py-2 font-mono text-xs font-semibold transition ${
+                  className={`flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-semibold transition sm:rounded-xl sm:px-3 sm:py-2 sm:text-xs ${
                     filterTab === 'loops'
                       ? 'border-neon-lime/50 bg-neon-lime/15 text-neon-lime'
                       : 'border-border-subtle bg-carbon-900 text-zinc-400 hover:text-white'
                   }`}
                 >
-                  <Layers className="h-3.5 w-3.5" />
-                  <span>Auto-Verified Loops ({scanMeta.validLoopCount})</span>
+                  <Layers className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                  <span className="sm:hidden">Loops ({scanMeta.validLoopCount})</span>
+                  <span className="hidden sm:inline">Auto-Verified Loops ({scanMeta.validLoopCount})</span>
                 </button>
 
                 {scanMeta.nonLoopCount > 0 && (
                   <button
                     type="button"
                     onClick={() => setFilterTab('flagged')}
-                    className={`flex min-h-[48px] items-center gap-1.5 rounded-xl border px-3.5 py-2 font-mono text-xs font-semibold transition ${
+                    className={`flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-semibold transition sm:rounded-xl sm:px-3 sm:py-2 sm:text-xs ${
                       filterTab === 'flagged'
                         ? 'border-amber-400/50 bg-amber-400/15 text-amber-300'
                         : 'border-border-subtle bg-carbon-900 text-zinc-400 hover:text-white'
                     }`}
                   >
-                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-                    <span>Flagged / Override ({scanMeta.nonLoopCount})</span>
+                    <AlertTriangle className="h-3 w-3 text-amber-400 sm:h-3.5 sm:w-3.5" />
+                    <span className="sm:hidden">Flagged ({scanMeta.nonLoopCount})</span>
+                    <span className="hidden sm:inline">Flagged / Override ({scanMeta.nonLoopCount})</span>
                   </button>
                 )}
               </div>
 
               {candidates.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                <div className="flex items-center gap-1.5 font-mono text-[10px] sm:gap-2 sm:text-[11px]">
                   <button
                     type="button"
                     onClick={selectAllValidLoops}
-                    className="rounded-lg border border-neon-lime/40 bg-neon-lime/10 px-2.5 py-1.5 font-bold text-neon-lime transition hover:bg-neon-lime/20"
+                    className="rounded-md border border-neon-lime/40 bg-neon-lime/10 px-2 py-1 font-bold text-neon-lime transition hover:bg-neon-lime/20 sm:rounded-lg sm:px-2.5 sm:py-1.5"
                   >
                     Select All Valid
                   </button>
                   <button
                     type="button"
                     onClick={clearSelection}
-                    className="rounded-lg border border-border-subtle bg-carbon-900 px-2.5 py-1.5 font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+                    className="rounded-md border border-border-subtle bg-carbon-900 px-2 py-1 font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white sm:rounded-lg sm:px-2.5 sm:py-1.5"
                   >
                     Deselect All
                   </button>
                   <button
                     type="button"
                     onClick={selectAllGpsActivities}
-                    className="px-1.5 py-1 text-zinc-400 transition hover:text-neon-cyan hover:underline"
+                    className="px-1.5 py-0.5 text-zinc-400 transition hover:text-neon-cyan hover:underline"
                   >
                     All GPS ({candidates.length})
                   </button>
@@ -471,22 +475,23 @@ export default function SyncReviewModal({
 
             {/* Co-op Capture Bar: "Walked with Friends" Multi-Select */}
             {availableFriends.length > 0 && (
-              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-border-subtle/70 bg-carbon-950/90 px-5 py-2.5 sm:px-6">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-neon-magenta/40 bg-neon-magenta/10 text-neon-magenta">
-                    <Users className="h-3.5 w-3.5" />
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-subtle/70 bg-carbon-950/90 px-3.5 py-1.5 sm:flex-wrap sm:gap-2.5 sm:px-6 sm:py-2.5">
+                <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-neon-magenta/40 bg-neon-magenta/10 text-neon-magenta sm:h-7 sm:w-7 sm:rounded-lg">
+                    <Users className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                   </span>
                   <div>
-                    <p className="font-mono text-[11px] font-bold uppercase tracking-wider text-white">
-                      Walked with Friends (Co-op Capture)
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-white sm:text-[11px]">
+                      <span className="sm:hidden">Co-op Walk:</span>
+                      <span className="hidden sm:inline">Walked with Friends (Co-op Capture)</span>
                     </p>
-                    <p className="font-mono text-[10px] text-zinc-400">
+                    <p className="hidden font-mono text-[10px] text-zinc-400 sm:block">
                       Tag squadmates who walked with you to share H3 hex ownership &amp; leaderboard credit:
                     </p>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-1 items-center justify-end gap-1.5 overflow-x-auto sm:flex-initial sm:flex-wrap">
                   {availableFriends.map((friend) => {
                     const isTagged = globalCopilotIds.includes(friend.userId);
                     return (
@@ -494,7 +499,7 @@ export default function SyncReviewModal({
                         key={friend.userId}
                         type="button"
                         onClick={() => toggleGlobalCopilot(friend.userId)}
-                        className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 py-1 font-mono text-xs font-semibold transition ${
+                        className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 font-mono text-[11px] font-semibold transition sm:min-h-[34px] sm:rounded-xl sm:px-2.5 sm:text-xs ${
                           isTagged
                             ? 'border-white/70 bg-zinc-800 text-white shadow'
                             : 'border-border-subtle bg-carbon-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
@@ -509,7 +514,7 @@ export default function SyncReviewModal({
                         }
                       >
                         <span
-                          className="h-2.5 w-2.5 rounded-full"
+                          className="h-2 w-2 rounded-full sm:h-2.5 sm:w-2.5"
                           style={{ backgroundColor: friend.colorHex }}
                         />
                         <span>{friend.displayName}</span>
@@ -527,7 +532,7 @@ export default function SyncReviewModal({
             )}
 
             {/* Body: Candidate List */}
-            <div className="touch-scroll flex-1 overflow-y-auto p-4 sm:p-6">
+            <div className="touch-scroll min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
               {error && (
                 <div className="mb-4 flex items-center gap-2.5 rounded-2xl border border-red-500/40 bg-red-500/10 p-3.5 text-xs text-red-200">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
@@ -581,7 +586,7 @@ export default function SyncReviewModal({
                         onClick={() =>
                           toggleSelection(item.stravaActivityId, hasGps)
                         }
-                        className={`group rounded-2xl border p-3.5 transition ${
+                        className={`group rounded-2xl border p-2.5 transition sm:p-3.5 ${
                           !hasGps
                             ? 'cursor-not-allowed border-border-subtle/50 bg-carbon-950/40 opacity-60'
                             : isSelected
@@ -589,11 +594,11 @@ export default function SyncReviewModal({
                               : 'cursor-pointer border-border-subtle bg-carbon-950/80 hover:border-zinc-700'
                         }`}
                       >
-                        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                          <div className="flex min-w-0 flex-1 items-center gap-3.5">
+                        <div className="flex flex-col justify-between gap-2.5 sm:flex-row sm:items-center sm:gap-3">
+                          <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3.5">
                             {/* Selection Checkbox */}
                             <div
-                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition ${
+                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition sm:h-6 sm:w-6 sm:rounded-lg ${
                                 !hasGps
                                   ? 'border-zinc-700 bg-carbon-900 text-zinc-600'
                                   : isSelected
@@ -622,65 +627,79 @@ export default function SyncReviewModal({
                                     ? playerColor
                                     : '#22c55e'
                               }
-                              size={64}
+                              size={52}
                               isLoop={effectiveMode === 'loop'}
                             />
 
                             {/* Activity Title & Primary Telemetry */}
                             <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <span
-                                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider ${
-                                    item.isLoop
-                                      ? 'border border-neon-lime/40 bg-neon-lime/10 text-neon-lime'
+                              <div className="flex flex-wrap items-center justify-between gap-1">
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span
+                                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider sm:text-[10px] ${
+                                      item.isLoop
+                                        ? 'border border-neon-lime/40 bg-neon-lime/10 text-neon-lime'
+                                        : !hasGps
+                                          ? 'border border-zinc-700 bg-zinc-800 text-zinc-400'
+                                          : 'border border-amber-400/40 bg-amber-400/10 text-amber-300'
+                                    }`}
+                                  >
+                                    {item.isLoop
+                                      ? item.detectionStatus ===
+                                        'valid_internal_loop'
+                                        ? 'INTERNAL LOOP'
+                                        : 'CLOSED LOOP'
                                       : !hasGps
-                                        ? 'border border-zinc-700 bg-zinc-800 text-zinc-400'
-                                        : 'border border-amber-400/40 bg-amber-400/10 text-amber-300'
-                                  }`}
-                                >
-                                  {item.isLoop
-                                    ? item.detectionStatus ===
-                                      'valid_internal_loop'
-                                      ? 'VERIFIED INTERNAL LOOP'
-                                      : 'VERIFIED CLOSED LOOP'
-                                    : !hasGps
-                                      ? 'NO GPS STREAM'
-                                      : effectiveMode === 'loop'
-                                        ? 'OVERRIDE: FORCED LOOP'
-                                        : 'OVERRIDE: 25M CORRIDOR'}
-                                </span>
+                                        ? 'NO GPS'
+                                        : effectiveMode === 'loop'
+                                          ? 'FORCED LOOP'
+                                          : '25M CORRIDOR'}
+                                  </span>
 
-                                <span className="rounded border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">
-                                  {item.sportType}
-                                </span>
+                                  <span className="rounded border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[9px] text-zinc-300 sm:text-[10px]">
+                                    {item.sportType}
+                                  </span>
 
-                                {item.alreadyImportedInRound && (
-                                  <span className="inline-flex items-center gap-1 rounded border border-neon-cyan/40 bg-neon-cyan/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neon-cyan">
-                                    <CheckCircle2 className="h-2.5 w-2.5" />
-                                    IN ROUND (CLICK TO RE-CLAIM)
+                                  {item.alreadyImportedInRound && (
+                                    <span className="inline-flex items-center gap-1 rounded border border-neon-cyan/40 bg-neon-cyan/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-neon-cyan sm:text-[10px]">
+                                      <CheckCircle2 className="h-2.5 w-2.5" />
+                                      IN ROUND
+                                    </span>
+                                  )}
+                                </div>
+
+                                {hasGps && (
+                                  <span
+                                    className="rounded-md border px-2 py-0.5 font-mono text-[10px] font-bold sm:hidden"
+                                    style={{
+                                      borderColor: `${playerColor}66`,
+                                      backgroundColor: `${playerColor}18`,
+                                      color: playerColor,
+                                    }}
+                                  >
+                                    +{activeCellsCount} HEX
                                   </span>
                                 )}
                               </div>
 
-                              <h3 className="mt-1 truncate text-sm font-bold text-white">
+                              <h3 className="mt-0.5 truncate text-sm font-bold text-white">
                                 {item.name}
                               </h3>
 
-                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-zinc-400">
-                                <span className="flex items-center gap-1">
-                                  <Navigation className="h-3 w-3 text-zinc-500" />
+                              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[10px] text-zinc-400 sm:text-[11px]">
+                                <span className="flex items-center gap-1 text-zinc-200">
+                                  <Navigation className="h-2.5 w-2.5 text-zinc-500 sm:h-3 sm:w-3" />
                                   {formatDistanceKm(item.distanceMeters)} km
                                 </span>
                                 <span className="flex items-center gap-1">
-                                  <Timer className="h-3 w-3 text-zinc-500" />
+                                  <Timer className="h-2.5 w-2.5 text-zinc-500 sm:h-3 sm:w-3" />
                                   {formatDuration(item.movingTimeSeconds)}
                                 </span>
                                 <span className="text-zinc-300">
                                   {formatPaceMinPerKm(
                                     item.distanceMeters,
                                     item.movingTimeSeconds
-                                  )}{' '}
-                                  /km
+                                  )}
                                 </span>
                                 <span className="text-zinc-500">
                                   • {formatRelativeTime(item.startedAt)}
@@ -693,9 +712,9 @@ export default function SyncReviewModal({
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
-                                    className="inline-flex items-center gap-1 text-strava-orange hover:underline"
+                                    className="inline-flex items-center gap-0.5 text-strava-orange hover:underline"
                                   >
-                                    <span>View on Strava</span>
+                                    <span>Strava</span>
                                     <ExternalLink className="h-2.5 w-2.5" />
                                   </a>
                                 )}
@@ -705,7 +724,7 @@ export default function SyncReviewModal({
                               {hasGps && availableFriends.length > 0 && (
                                 <div
                                   onClick={(e) => e.stopPropagation()}
-                                  className="mt-2 flex flex-wrap items-center gap-1.5"
+                                  className="mt-1.5 flex flex-wrap items-center gap-1.5"
                                 >
                                   <button
                                     type="button"
@@ -809,9 +828,9 @@ export default function SyncReviewModal({
                             </div>
                           </div>
 
-                          {/* Right: Estimated Territory Yield Badge */}
+                          {/* Right: Estimated Territory Yield Badge (Desktop) */}
                           {hasGps && (
-                            <div className="flex shrink-0 flex-row items-center justify-between gap-2 border-t border-border-subtle/50 pt-2 sm:flex-col sm:items-end sm:border-t-0 sm:pt-0">
+                            <div className="hidden shrink-0 sm:flex sm:flex-col sm:items-end sm:gap-1">
                               <span
                                 className="rounded-lg border px-2.5 py-1 font-mono text-xs font-bold"
                                 style={{
@@ -833,31 +852,31 @@ export default function SyncReviewModal({
                           )}
                         </div>
 
-                        {/* Debug Telemetry Strip (Always visible so player sees exact algorithm metrics) */}
-                        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border-subtle/60 bg-carbon-900/70 px-3 py-1.5 font-mono text-[10px] text-zinc-400">
+                        {/* Debug Telemetry Strip (Compact 1-line on mobile, full details on desktop) */}
+                        <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-lg border border-border-subtle/60 bg-carbon-900/70 px-2.5 py-1 font-mono text-[9px] text-zinc-400 sm:mt-2.5 sm:rounded-xl sm:px-3 sm:py-1.5 sm:text-[10px]">
                           <span className="flex items-center gap-1 text-zinc-300">
                             <Cpu className="h-3 w-3 text-neon-cyan" />
                             <span>
-                              Start/End gap:{' '}
+                              Gap:{' '}
                               {item.closureDistanceMeters !== null
                                 ? `${Math.round(item.closureDistanceMeters)}m`
                                 : 'N/A'}
                             </span>
                           </span>
                           {item.internalClosureDistanceMeters !== null && (
-                            <>
-                              <span className="text-zinc-600">•</span>
-                              <span>
-                                Min internal gap:{' '}
-                                {Math.round(item.internalClosureDistanceMeters)}m
-                              </span>
-                            </>
+                            <span className="hidden sm:inline">
+                              • Min internal:{' '}
+                              {Math.round(item.internalClosureDistanceMeters)}m
+                            </span>
                           )}
                           <span className="text-zinc-600">•</span>
-                          <span>Points processed: {item.pointsProcessed}</span>
-                          <span className="text-zinc-600">•</span>
-                          <span className="text-zinc-300">
-                            Status: {item.detectionReason}
+                          <span>
+                            {formatAreaKm2(activeAreaKm2)} km²{' '}
+                            {effectiveMode === 'loop' ? 'Loop' : 'Corridor'}
+                          </span>
+                          <span className="hidden text-zinc-600 sm:inline">•</span>
+                          <span className="hidden text-zinc-300 sm:inline">
+                            {item.detectionReason}
                           </span>
                         </div>
 
@@ -932,24 +951,22 @@ export default function SyncReviewModal({
             </div>
 
             {/* Footer: Selection Totals & Import Button */}
-            <div className="safe-area-bottom flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-carbon-950/90 px-5 py-4 sm:px-6">
-              <div>
-                <p className="font-mono text-xs font-bold text-white">
+            <div className="safe-area-bottom flex shrink-0 flex-col gap-2 border-t border-border-subtle bg-carbon-950/90 px-3.5 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-4">
+              <div className="flex items-center justify-between gap-2 sm:block">
+                <p className="font-mono text-[11px] font-bold text-white sm:text-xs">
                   {selectedIds.size}{' '}
                   {selectedIds.size === 1 ? 'Activity' : 'Activities'} Selected
-                  for Import
                 </p>
-                <p className="font-mono text-[11px] text-zinc-400">
-                  Estimated Yield: +{totalEstimatedCells} H3 Hexes (
-                  {formatAreaKm2(totalEstimatedArea)} km²) in {roundName}
+                <p className="font-mono text-[10px] text-zinc-400 sm:text-[11px]">
+                  +{totalEstimatedCells} HEX ({formatAreaKm2(totalEstimatedArea)} km²)
                 </p>
               </div>
 
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2 sm:gap-2.5">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-xl border border-border-subtle bg-carbon-900 px-4 py-2.5 font-mono text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+                  className="flex min-h-[40px] items-center justify-center rounded-xl border border-border-subtle bg-carbon-900 px-3.5 py-2 font-mono text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white sm:min-h-[48px] sm:px-4 sm:py-2.5"
                 >
                   Cancel
                 </button>
@@ -966,16 +983,16 @@ export default function SyncReviewModal({
                         ? `0 0 22px ${playerColor}44`
                         : undefined,
                   }}
-                  className="flex min-h-[48px] items-center gap-2 rounded-xl bg-zinc-800 px-5 py-2.5 font-mono text-xs font-bold uppercase tracking-wider text-carbon-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                  className="flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-zinc-800 px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider text-carbon-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 sm:min-h-[48px] sm:flex-initial sm:gap-2 sm:px-5 sm:py-2.5 sm:text-xs"
                 >
                   {isImporting ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      <span>Claiming Territories...</span>
+                      <span>Claiming...</span>
                     </>
                   ) : (
                     <>
-                      <Sparkles className="h-4 w-4" />
+                      <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       <span>
                         Claim Selected Activities ({selectedIds.size})
                       </span>
